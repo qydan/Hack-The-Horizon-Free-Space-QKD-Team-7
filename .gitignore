@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor settings
+.vscode/
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime output
+*.log
+*.csv
+/frames/
+/captures/
+/output/
+/outputs/
+*_frame.*
+
+# OS metadata
+.DS_Store
