@@ -70,24 +70,39 @@ class QuantumCryptoEngine:
         p_error = self.e_optical + (self.alpha * drift) + (self.beta * jitter) + (self.gamma / intensity)
         return min(p_error, 0.50)  # Max error is 50% (pure random noise)
 
-    def generate_and_transmit(self, p_error: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def generate_and_transmit(self, p_error: float, eve_fraction: float = 0.0
+                              ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Alice generates states. The channel injects errors based on P_error.
         Bob measures the states.
+
+        ``eve_fraction`` is the fraction of pulses an intercept-resend eavesdropper
+        measures in a random basis and resends. Full interception (1.0) raises the
+        sifted-key QBER by about 25 percentage points.
         """
         n = self.block_size
         # Alice: random bits and bases (0: rectilinear, 1: diagonal)
         a_bits = self._secure_bits(n)
         a_bases = self._secure_bits(n)
 
+        # State actually arriving at Bob: Alice's, or Eve's re-prepared one
+        state_bits, state_bases = a_bits, a_bases
+        if eve_fraction > 0.0:
+            hit = self.rng.random(n) < eve_fraction
+            e_bases = self.rng.integers(0, 2, size=n, dtype=np.int64)
+            e_rand = self.rng.integers(0, 2, size=n, dtype=np.int64)
+            e_bits = np.where(e_bases == a_bases, a_bits, e_rand)  # wrong basis -> random result
+            state_bits = np.where(hit, e_bits, a_bits)
+            state_bases = np.where(hit, e_bases, a_bases)
+
         # Bob: random measurement bases
         b_bases = self.rng.integers(0, 2, size=n, dtype=np.int64)
 
-        # True where the environment/Eve corrupts the photon
+        # True where the environment corrupts the photon
         noise_mask = self.rng.random(n) < p_error
 
-        b_bits = a_bits.copy()
-        mismatched = a_bases != b_bases
+        b_bits = state_bits.copy()
+        mismatched = state_bases != b_bases
         # Mismatched bases yield a completely random bit (quantum collapse)
         random_bits = self.rng.integers(0, 2, size=n, dtype=np.int64)
         b_bits[mismatched] = random_bits[mismatched]
@@ -213,11 +228,22 @@ class QuantumCryptoEngine:
             return 0.5
         return math.sqrt(((n + m) / (n * m)) * ((m + 1) / m) * math.log(1.0 / self.eps_est) / 2.0)
 
-    def secret_key_length(self, n: int, qber: float, sample_size: int, leaked_bits: int) -> int:
-        """Bits of secret key extractable: n(1 - h2(e_upper)) - leakage - 2 log2(1/eps_sec)."""
-        e_upper = min(0.5, qber + self.finite_size_margin(n, sample_size))
+    def secret_key_length(self, n: int, qber: float, sample_size: int, leaked_bits: int,
+                          single_photon_fraction: float = 1.0,
+                          e1_upper: Optional[float] = None) -> int:
+        """Bits of secret key extractable.
+
+        Ideal single-photon source (default):
+            n(1 - h2(e_upper)) - leakage - 2 log2(1/eps_sec)
+        With decoy-state analysis (weak coherent pulses):
+            n * Delta * (1 - h2(e1_upper + margin)) - leakage - 2 log2(1/eps_sec)
+        where Delta is the certified single-photon fraction of the sifted key.
+        """
+        base = qber if e1_upper is None else e1_upper
+        e_upper = min(0.5, base + self.finite_size_margin(n, sample_size))
         loss = 2.0 * math.log2(1.0 / self.eps_sec)
-        return int(math.floor(n * (1.0 - binary_entropy(e_upper)) - leaked_bits - loss))
+        usable = n * max(0.0, single_photon_fraction) * (1.0 - binary_entropy(e_upper))
+        return int(math.floor(usable - leaked_bits - loss))
 
     def privacy_amplify(self, key: np.ndarray, secret_length: int) -> str:
         """Toeplitz universal hashing of the reconciled key down to KEY_BITS bits (hex).
@@ -237,13 +263,18 @@ class QuantumCryptoEngine:
 
     def reconcile_and_amplify(self, a_keys: np.ndarray, b_keys: np.ndarray,
                               qber: Optional[float] = None,
-                              sample_size: Optional[int] = None) -> str:
+                              sample_size: Optional[int] = None,
+                              decoy=None) -> str:
         """Cascade error correction followed by Toeplitz privacy amplification.
 
         ``qber`` / ``sample_size`` are the parameter-estimation results from
         ``sift_and_estimate`` (sample size is the number of sampled bits). If omitted, the
         error rate is taken from the number of errors Cascade corrected and the sample size
         defaults to n/4 (the default 20% sample ratio).
+
+        ``decoy`` is an optional decoy-state result (see ``decoy.py``) exposing
+        ``single_photon_fraction`` and ``e1_upper``; if given, only the certified
+        single-photon part of the key is counted as secret.
 
         Returns a 256-bit key as 64 hex chars. ``self.last_report`` holds diagnostics.
         """
@@ -253,7 +284,9 @@ class QuantumCryptoEngine:
 
         qber_used = qber if qber is not None else corrected / n
         m = sample_size if sample_size is not None else max(1, n // 4)
-        secret_len = self.secret_key_length(n, qber_used, m, leaked)
+        delta = 1.0 if decoy is None else decoy.single_photon_fraction
+        e1 = None if decoy is None else decoy.e1_upper
+        secret_len = self.secret_key_length(n, qber_used, m, leaked, delta, e1)
 
         self.last_report = {
             "reconciled_bits": n,
@@ -261,5 +294,6 @@ class QuantumCryptoEngine:
             "leaked_bits": leaked,
             "secret_length": secret_len,
             "qber_used": float(qber_used),
+            "single_photon_fraction": float(delta),
         }
         return self.privacy_amplify(b_fixed, secret_len)
