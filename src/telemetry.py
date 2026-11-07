@@ -1,11 +1,24 @@
 import csv
 import math
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, List, Mapping, Sequence
 
 
 class TelemetryExhausted(Exception):
     """Raised by finite providers (e.g. a CSV replay) when there is no more data."""
+
+
+def aggregate_window(rows: Sequence[Mapping[str, float]]) -> Dict[str, float]:
+    """Collapse per-frame rows into one telemetry window: drift = mean,
+    jitter = RMS, intensity = mean."""
+    n = len(rows)
+    if n == 0:
+        raise ValueError("cannot aggregate an empty window")
+    return {
+        "drift": sum(r["drift"] for r in rows) / n,
+        "jitter": math.sqrt(sum(r["jitter"] ** 2 for r in rows) / n),
+        "intensity": sum(r["intensity"] for r in rows) / n,
+    }
 
 
 class TelemetryProvider(ABC):
@@ -90,9 +103,4 @@ class CSVReplayProvider(TelemetryProvider):
             self._cursor += 1
         window = self._rows[start:self._cursor]
 
-        n = len(window)
-        return {
-            "drift": sum(r["drift"] for r in window) / n,
-            "jitter": math.sqrt(sum(r["jitter"] ** 2 for r in window) / n),
-            "intensity": sum(r["intensity"] for r in window) / n,
-        }
+        return aggregate_window(window)
