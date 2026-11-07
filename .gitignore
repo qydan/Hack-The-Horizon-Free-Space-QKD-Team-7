@@ -19,6 +19,7 @@ htmlcov/
 # Runtime output
 *.log
 *.csv
+!data/fake_telemetry.csv
 /frames/
 /captures/
 /output/
