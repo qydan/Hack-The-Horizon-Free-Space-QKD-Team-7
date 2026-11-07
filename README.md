@@ -15,7 +15,10 @@ To comply with the "Cyber Sandbox" requirements, this system does not transmit r
 
 * `src/telemetry.py`: The interface contract. Defines the `TelemetryProvider` base class (metric definitions and units are in its docstring) and `CSVReplayProvider`, which replays recorded/synthetic telemetry. The OpenCV/camera provider will inherit from the same base class.
 * `src/qkd_core.py`: The cryptographic engine. BB84 transmit/sift, 11% QBER gate, Cascade error correction (with leakage accounting), and Toeplitz privacy amplification to a 256-bit key. Key bits come from `os.urandom`.
-* `src/demo_runner.py`: The integration script. Runs on a mock generator (`--source mock`) or replays a telemetry CSV (`--source csv`).
+* `src/camera_provider.py`: OpenCV telemetry. LED detector, acquisition/tracking state machine (SEARCH → ACQUIRE → TRACK, with reacquire and a time-to-lock timer), calibration, `VideoCaptureSource` for a real camera and `SyntheticLEDSource` for development.
+* `src/decoy.py`: Decoy-state analysis and a photon-number-splitting attacker model.
+* `src/key_pool.py`: Pools sifted bits across windows so noisier conditions still yield keys.
+* `src/demo_runner.py`: The integration script. Sources: `mock`, `csv` (replay), `synthetic` (rendered camera frames), `camera` (real USB camera). Options for the threat model (`--eve`, `--decoy`, `--pns`), pooling (`--pool`), recording (`--record`) and run logs (`--log`).
 * `data/fake_telemetry.csv`: Synthetic 120 s telemetry (acquisition, calm, moderate fan, gust, recovery). Regenerate with `python tools/generate_fake_telemetry.py`.
 
 ## 🚀 How to Test the Engine (Hardware-Free)
@@ -37,13 +40,32 @@ python src/demo_runner.py --source csv         # replay data/fake_telemetry.csv 
 python src/demo_runner.py --source csv --csv my_recording.csv --window 1.0
 ```
 
+More modes:
+```bash
+python src/demo_runner.py --source synthetic --quiet --log run.jsonl   # camera pipeline on rendered frames (120 s)
+python tools/make_dashboard.py run.jsonl dashboard.html                # charts + stats for the run
+python src/demo_runner.py --source csv --eve 1.0                       # intercept-resend attacker -> aborts
+python src/demo_runner.py --source csv --decoy --pns                   # PNS attacker -> rejected by decoy states
+python src/demo_runner.py --source csv --pool                          # pool windows into larger blocks
+python src/demo_runner.py --source camera --calibrate 10               # real USB camera (see docs/hardware_handoff.md)
+```
+
 Telemetry CSV format: header `timestamp,drift,jitter,intensity`, one row per camera frame (seconds, px, px/s, 0-1).
 
 OpenCV is included for the planned camera integration; the current mock demo does not use it yet.
 
+## 📚 Docs
+
+* `CONTEXT.md`: the hackathon brief (deliverables D1-D3).
+* `docs/system_architecture.md`: layered design of the prototype.
+* `docs/d3_engineering_design.md`: D3, payload budget, link budget and roadmap to a commercial drone.
+* `docs/threat_model.md`: intercept-resend, PNS / decoy states, and what is out of scope.
+* `docs/hardware_handoff.md`: what the rig team needs to do (tuning, calibration, recording).
+* `docs/hardware_bill_of_materials.md`, `docs/calibration_log.md`, `docs/live_demo_runbook.md`.
+
 ## 🧪 Running the Test Suite
 
-Tests use `pytest` and live in `tests/`. They only need `numpy` and `pytest` (no hardware or OpenCV).
+Tests use `pytest` and live in `tests/`. They need `numpy`, `pytest` and OpenCV (`opencv-python-headless` is enough); no camera or hardware is used.
 
 ### One-time setup
 ```bash
@@ -52,7 +74,7 @@ sudo apt update && sudo apt install -y python3-venv python3-pip
 
 python3 -m venv .venv
 source .venv/bin/activate        # On Windows: .venv\Scripts\activate
-python -m pip install numpy pytest
+python -m pip install numpy pytest opencv-python-headless
 ```
 
 ### Run the tests
