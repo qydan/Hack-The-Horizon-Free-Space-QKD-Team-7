@@ -1,6 +1,9 @@
 """Render a demo run log (JSONL from `demo_runner.py --log`) as a self-contained HTML page.
 
-    python src/demo_runner.py --source synthetic --quiet --log run.jsonl
+Shows the live QBER trace (100 ms steps) against the 11% gate, the measured motion, the two
+error bars (ground residual vs drone lean), and the gate's decision for every key block.
+
+    python src/demo_runner.py --source sim --quiet --log run.jsonl
     python tools/make_dashboard.py run.jsonl dashboard.html
 """
 import html
@@ -8,8 +11,8 @@ import json
 import sys
 
 GATE = 0.11
-COLORS = {"key": "var(--ok)", "abort": "var(--bad)", "decoy_reject": "var(--bad)",
-          "pooling": "var(--warn)", "no_key": "var(--warn)"}
+COLORS = {"key": "var(--ok)", "abort": "var(--bad)", "decoy_abort": "var(--bad)",
+          "pooling": "var(--warn)", "no_key": "var(--warn)", "no_link": "var(--muted)"}
 
 
 def load(path):
@@ -46,23 +49,24 @@ def strip(rows, w=640, h=26):
     cells = "".join(
         f'<rect x="{i*cw:.2f}" y="0" width="{max(cw-0.6,0.4):.2f}" height="{h}" fill="{COLORS.get(r["outcome"], "var(--muted)")}">'
         f'<title>t={r["t"]:g}s {r["outcome"]}</title></rect>' for i, r in enumerate(rows))
-    return f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="Outcome per window">{cells}</svg>'
+    return f'<svg viewBox="0 0 {w} {h}" role="img" aria-label="Gate decision per key block">{cells}</svg>'
 
 
-def stats(rows):
+def stats(rows, trace):
     keys = [r for r in rows if r["outcome"] == "key"]
     best = run = 0
     for r in rows:
         run = run + 1 if r["outcome"] == "key" else 0
         best = max(best, run)
-    first_lock = next((r["t"] for r in rows if r.get("tracking_state") == "TRACK"), None)
+    first_lock = next((r["t"] for r in trace if r.get("state") == "TRACK"), None)
     return [
-        ("Windows", len(rows)),
+        ("Key blocks", len(rows)),
         ("Keys issued", len(keys)),
         ("Key yield", f"{100*len(keys)/len(rows):.0f}%"),
-        ("Longest key streak", f"{best} windows"),
+        ("Longest key streak", f"{best} blocks"),
+        ("Secret bits issued", sum(r["secret_bits"] or 0 for r in keys)),
         ("Max QBER while issuing keys", f"{100*max((r['qber'] for r in keys), default=0):.1f}%"),
-        ("Aborts", sum(r["outcome"] == "abort" for r in rows)),
+        ("Aborts (QBER / decoy)", sum(r["outcome"] in ("abort", "decoy_abort") for r in rows)),
         ("First tracking lock", f"{first_lock:g} s" if first_lock is not None else "n/a"),
     ]
 
@@ -87,29 +91,38 @@ figcaption{font-weight:600;margin-bottom:4px}svg{width:100%;height:auto;display:
 </style></head><body><main><h1>QKD Run Dashboard</h1>
 <div class="stats">__STATS__</div>
 __CHARTS__
-<figure><figcaption>Outcome per window</figcaption>__STRIP__
-<div class="legend"><span><i style="background:var(--ok)"></i>key</span><span><i style="background:var(--bad)"></i>abort / decoy reject</span>
-<span><i style="background:var(--warn)"></i>pooling / no key</span></div></figure>
+<figure><figcaption>Gate decision per key block</figcaption>__STRIP__
+<div class="legend"><span><i style="background:var(--ok)"></i>key</span><span><i style="background:var(--bad)"></i>abort / decoy abort</span>
+<span><i style="background:var(--warn)"></i>pooling / no key / no link</span></div></figure>
 </main></body></html>"""
 
 
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
-    rows = load(sys.argv[1])
-    if not rows:
-        sys.exit("empty log")
+    allrows = load(sys.argv[1])
+    trace = [r for r in allrows if r.get("kind") == "interval"]
+    rows = [r for r in allrows if r.get("kind") == "block"]
+    if not rows or not trace:
+        sys.exit("log has no interval/block records (use a log written by demo_runner.py)")
+    for r in trace:
+        r["lean_mrad"] = r["lean_deg"] * 17.453     # degrees -> mrad, to compare with the ground residual
+    top = max(10, max(max(r["residual_mrad"], r["lean_mrad"]) for r in trace))
     charts = [
-        line_chart(rows, [("p_error", "channel error P", "var(--c1)"), ("qber", "sampled QBER", "var(--c2)")],
-                   0.55, "Channel error and QBER", gate=GATE),
-        line_chart(rows, [("drift", "drift (px)", "var(--c1)")], max(10, max(r["drift"] for r in rows)),
-                   "Drift", h=130),
-        line_chart(rows, [("jitter", "jitter (px/s)", "var(--c2)")], max(10, max(r["jitter"] for r in rows)),
-                   "Jitter", h=130),
-        line_chart(rows, [("intensity", "intensity", "var(--c3)")], 1.0, "Intensity", h=130),
+        line_chart(trace, [("qber_expected", "error budget QBER", "var(--c1)"),
+                           ("qber_measured", "measured QBER (100 ms)", "var(--c2)")],
+                   0.55, "Live QBER trace", gate=GATE),
+        line_chart(trace, [("residual_mrad", "ground residual (gimbal + tracker)", "var(--c1)"),
+                           ("lean_mrad", "drone lean (needs a drone-side mirror)", "var(--c2)")],
+                   top, "Two error bars (mrad)", h=150),
+        line_chart(trace, [("drift_mrad", "drift", "var(--c1)"), ("jitter_mrad", "jitter", "var(--c2)")],
+                   max(10, max(max(r["drift_mrad"], r["jitter_mrad"]) for r in trace)), "Drift and jitter (mrad)", h=130),
+        line_chart(trace, [("intensity", "beacon intensity", "var(--c3)")], 1.0, "Intensity", h=110),
+        line_chart(trace, [("eta_db", "transmittance loss (dB)", "var(--c3)")],
+                   max(30, min(60, max(r["eta_db"] for r in trace))), "Loss (dB)", h=110),
     ]
     stat_html = "".join(f'<div class="stat"><b>{html.escape(str(v))}</b><span>{html.escape(k)}</span></div>'
-                        for k, v in stats(rows))
+                        for k, v in stats(rows, trace))
     page = PAGE.replace("__STATS__", stat_html).replace("__CHARTS__", "".join(charts)).replace("__STRIP__", strip(rows))
     with open(sys.argv[2], "w") as f:
         f.write(page)

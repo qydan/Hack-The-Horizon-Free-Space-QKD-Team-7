@@ -68,11 +68,14 @@ Geometric loss dominates: spot diameter = divergence x range, collected fraction
 
 The 5 km case only closes if the beam stays narrow (20 urad), and a 20 urad beam needs pointing
 error well under 10 urad. That is why mutual tracking (beacon cameras + FSM) is essential, not optional.
-The sandbox uses the same structure: `P_error` rises with drift and jitter, and intensity maps to
-transmittance (`eta = eta0 * intensity`, `eta0 = 0.05`, in the range of the 1 km budget).
+The sandbox uses the same structure at room scale (`src/error_budget.py`): geometric loss from
+range, a receiver pointing factor from the measured ground residual, a transmitter pointing
+factor from drone lean and drift, and beacon brightness. With a 10 degree LED beam and a 25 mm
+lens that is about 26 dB at the 3 m demo range. QBER then follows from signal clicks against
+noise clicks.
 
-Two-way composite used in the sandbox design: `P_total = 1 - (1 - P_downlink)(1 - P_uplink)`;
-either direction losing lock aborts key generation.
+The prototype models the downlink only. In the two-way design, either direction losing lock
+aborts key generation.
 
 ## 4. Safety, regulatory and security
 - **Laser safety:** keep the quantum beam at single-photon-level powers and the beacon within
@@ -91,8 +94,8 @@ either direction losing lock aborts key generation.
 
 | Phase | Goal | What gets built | Exit criteria |
 |---|---|---|---|
-| **0. Hackathon (now)** | Prove the pipeline | LED beacon + USB camera hardware-in-the-loop; telemetry-driven BB84 emulation (sift, Cascade, privacy amplification), decoy and intercept-resend models | Acquisition under 60 s; 2 min tracking under fan turbulence; QBER below 11% with keys issued |
-| **1. Bench QKD** (0-3 mo) | Replace emulated photons with real ones | Attenuated 850 nm source, polarization encoding, SPAD receiver on an optical table or 10 m indoor path | Measured QBER and key rate; fit the transfer function to real data |
+| **0. Hackathon (now)** | Prove the pipeline | Blinking beacon + ground camera hardware-in-the-loop (lock-in tracker); telemetry-driven BB84 emulation (error budget, sift, Cascade, privacy amplification), decoy-state and intercept-resend / PNS models | Acquisition under 60 s; 2 min tracking under fan turbulence; QBER below 11% with keys issued |
+| **1. Bench QKD** (0-3 mo) | Replace emulated photons with real ones | Attenuated 850 nm source, polarization encoding, SPAD receiver on an optical table or 10 m indoor path | Measured QBER and key rate; check the error budget against real data |
 | **2. Outdoor ground link** (3-9 mo) | Tracking over real atmosphere | Ground-to-ground FSO at 100 m to 1 km with SWIR beacons, FSM, daylight filtering | Link held across a day / weather range; measured eta and QBER vs turbulence |
 | **3. Drone integration** (9-18 mo) | Fit the payload on an airframe | Under 5 kg terminal on a gimbal; tethered hover tests | Mass and power budget met; lock held in wind; reacquisition tests |
 | **4. Free flight** (18-30 mo) | Drone-to-ground keys | Free-flight link at 1 to 5 km, role swap, relay between two ground nodes; ETSI-style key API | Sustained secret key rate at range; integration demo with an off-the-shelf encryptor |
@@ -106,9 +109,12 @@ aperture, larger receivers), and regulatory approval for laser operation near ai
 
 | Hackathon prototype | Commercial equivalent |
 |---|---|
-| Green LED on drone gimbal | 850 nm quantum source + 1550 nm beacon |
-| Fixed USB camera, OpenCV centroid | SWIR tracking camera + FSM closed loop |
-| `drift`, `jitter`, `intensity` | Residual pointing error, pointing jitter, received power |
-| `P_error` transfer function | Measured QBER vs telemetry (fitted in phase 1-2) |
+| 13 Hz blinking beacon on the drone (LED or retroreflector) | 1550 nm beacon laser, on a different wavelength from the 850 nm quantum source |
+| Ground camera with lock-in detection and Kalman filter (fixed, or on a pan-tilt gimbal) | SWIR tracking camera + FSM closed loop |
+| Ground residual (what the ground station failed to remove) | Receiver pointing error after the FSM |
+| Drone lean (body-mounted beacon tilts with the drone) | Transmitter pointing error: the case for a drone-side gimbal and FSM |
+| `drift`, `jitter`, `intensity`, `range` telemetry | Pointing jitter, received power, link range |
+| Error budget (telemetry to transmittance to QBER) | Measured QBER vs telemetry (phase 1-2) |
 | Emulated photons in software | Real polarization-encoded photons on SPADs |
-| Decoy-state / intercept-resend models | Same protocol logic, running on real counts |
+| Decoy-state / intercept-resend / PNS models | Same protocol logic, running on real counts |
+| Optional IR LED data link (`rx_signal`, `rx_background`) | Classical channel for sifting and error correction |

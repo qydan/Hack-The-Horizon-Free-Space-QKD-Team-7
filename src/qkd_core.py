@@ -16,6 +16,10 @@ def binary_entropy(x: float) -> float:
 class QuantumCryptoEngine:
     """Software BB84 pipeline: transmit -> sift -> estimate QBER -> Cascade -> privacy amplification.
 
+    The error rate fed into ``transmit_detected`` / ``generate_and_transmit`` comes from the
+    sandbox channel (``channel.py``), which is driven by the measured tracking telemetry
+    through the error budget (``error_budget.py``).
+
     Randomness:
       * Alice's key material (bits and bases) comes from ``os.urandom``.
       * Simulation randomness (Bob's bases, channel noise, QBER sample choice, public
@@ -33,12 +37,6 @@ class QuantumCryptoEngine:
 
     def __init__(self, block_size: int = 32768, seed: Optional[int] = None):
         self.block_size = block_size
-
-        # Physics calibration constants for the transfer function
-        self.e_optical = 0.015
-        self.alpha = 0.0015
-        self.beta = 0.0012
-        self.gamma = 0.012
 
         # Security parameters
         self.eps_est = 1e-6   # failure probability of the finite-size QBER bound
@@ -64,17 +62,31 @@ class QuantumCryptoEngine:
 
     # ------------------------------------------------------------------ channel
 
-    def calculate_channel_error(self, drift: float, jitter: float, intensity: float) -> float:
-        """Translates raw sensor telemetry into a 0.0 to 1.0 quantum error likelihood."""
-        intensity = max(0.01, min(intensity, 1.0))
-        p_error = self.e_optical + (self.alpha * drift) + (self.beta * jitter) + (self.gamma / intensity)
-        return min(p_error, 0.50)  # Max error is 50% (pure random noise)
+    def transmit_detected(self, n_detected: int, error_rate: float
+                          ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """BB84 over the sandbox channel, for the pulses Bob actually detected.
+
+        The channel model (``channel.py``) decides how many signal pulses produced a click
+        and what fraction of those clicks are wrong when the bases match (optical error,
+        dark counts, background, Eve). Alice's bits and bases are fresh key material;
+        Bob's bases are random. Mismatched bases give a random result; the sifting step
+        later throws those away.
+        """
+        n = int(n_detected)
+        a_bits = self._secure_bits(n)
+        a_bases = self._secure_bits(n)
+        b_bases = self.rng.integers(0, 2, size=n, dtype=np.int64)
+        flips = self.rng.random(n) < min(max(error_rate, 0.0), 0.5)
+        random_bits = self.rng.integers(0, 2, size=n, dtype=np.int64)
+        b_bits = np.where(a_bases == b_bases, a_bits ^ flips, random_bits).astype(np.int64)
+        return a_bits, a_bases, b_bits, b_bases
 
     def generate_and_transmit(self, p_error: float, eve_fraction: float = 0.0
                               ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Alice generates states. The channel injects errors based on P_error.
-        Bob measures the states.
+        Standalone BB84 round over ``block_size`` pulses with a fixed error probability
+        ``p_error`` on matched bases. Used by the engine-level tests; the sandbox uses
+        ``transmit_detected`` with the click counts and error rate from ``channel.py``.
 
         ``eve_fraction`` is the fraction of pulses an intercept-resend eavesdropper
         measures in a random basis and resends. Full interception (1.0) raises the

@@ -1,2 +1,3 @@
 numpy>=1.24
-opencv-python>=4.8
+pyzmq>=25
+opencv-contrib-python>=4.8   # contrib for ArUco/AprilTag

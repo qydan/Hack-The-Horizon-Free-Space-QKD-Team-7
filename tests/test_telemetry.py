@@ -1,74 +1,97 @@
-import math
-import os
+import json
+import time
 
 import pytest
 
-from telemetry import CSVReplayProvider, TelemetryExhausted
+from telemetry import (FIELDS, ControlPublisher, ControlSubscriber, CSVReplaySource, TelemetryMessage,
+                       ZmqPublisher, ZmqSubscriber, write_csv)
 
-HEADER = "timestamp,drift,jitter,intensity\n"
-FAKE = os.path.join(os.path.dirname(__file__), "..", "data", "fake_telemetry.csv")
-
-
-def write(tmp_path, body, header=HEADER):
-    p = tmp_path / "t.csv"
-    p.write_text(header + body)
-    return str(p)
+EXAMPLE = {"t": 12.508, "state": "TRACK", "drift_mrad": 3.1, "jitter_mrad": 0.8, "residual_mrad": 0.4,
+           "gimbal_lag_mrad": 0.3, "lean_deg": 4.2, "range_m": 3.05, "intensity": 0.92,
+           "rx_signal": 0.88, "rx_background": 0.04}
 
 
-def test_window_aggregation(tmp_path):
-    path = write(tmp_path, "0.0,2,3,1.0\n0.5,4,4,0.5\n1.0,10,0,0.2\n")
-    prov = CSVReplayProvider(path, window_s=1.0)
-    m = prov.get_metrics()  # rows at t=0.0 and 0.5
-    assert m["drift"] == pytest.approx(3.0)
-    assert m["jitter"] == pytest.approx(math.sqrt((9 + 16) / 2))  # RMS
-    assert m["intensity"] == pytest.approx(0.75)
-    m2 = prov.get_metrics()  # row at t=1.0
-    assert m2["drift"] == 10
-    with pytest.raises(TelemetryExhausted):
-        prov.get_metrics()
+def msg(t=0.0, **kw):
+    d = {**EXAMPLE, "t": t, **kw}
+    return TelemetryMessage.from_dict(d)
 
 
-def test_loop_restarts(tmp_path):
-    prov = CSVReplayProvider(write(tmp_path, "0,1,1,1\n"), window_s=1.0, loop=True)
-    assert prov.get_metrics() == prov.get_metrics()
+def test_example_message_from_the_design_doc_round_trips():
+    m = TelemetryMessage.from_dict(EXAMPLE)
+    assert json.loads(m.to_json()) == EXAMPLE
+    assert TelemetryMessage.from_json(m.to_json()) == m
 
 
-def test_reset(tmp_path):
-    prov = CSVReplayProvider(write(tmp_path, "0,1,1,1\n"), window_s=1.0)
-    prov.get_metrics()
-    prov.reset()
-    prov.get_metrics()
+def test_ir_link_fields_are_optional():
+    d = {k: v for k, v in EXAMPLE.items() if not k.startswith("rx_")}
+    m = TelemetryMessage.from_dict(d)
+    assert m.rx_signal is None and m.rx_background is None
 
 
-@pytest.mark.parametrize("body,header,msg", [
-    ("0,1,1,1\n", "timestamp,drift,jitter\n", "missing column"),
-    ("", HEADER, "no data rows"),
-    ("0,1,1,1\n0,1,1,1\n", HEADER, "strictly increasing"),
-    ("0,abc,1,1\n", HEADER, "non-numeric"),
-    ("0,nan,1,1\n", HEADER, "non-finite"),
-])
-def test_bad_files_are_rejected(tmp_path, body, header, msg):
-    with pytest.raises(ValueError, match=msg):
-        CSVReplayProvider(write(tmp_path, body, header))
-
-
-def test_bad_window(tmp_path):
+@pytest.mark.parametrize("bad", [{"state": "FLYING"}, {"bogus": 1}])
+def test_bad_messages_rejected(bad):
     with pytest.raises(ValueError):
-        CSVReplayProvider(write(tmp_path, "0,1,1,1\n"), window_s=0)
+        TelemetryMessage.from_dict({**EXAMPLE, **bad})
 
 
-def test_fake_data_matches_contract_and_drives_both_outcomes():
-    from qkd_core import QuantumCryptoEngine
-    prov = CSVReplayProvider(FAKE, window_s=1.0)
-    assert prov.duration == pytest.approx(120, abs=0.1)
-    e = QuantumCryptoEngine()
-    ps = []
-    while True:
-        try:
-            m = prov.get_metrics()
-        except TelemetryExhausted:
-            break
-        assert m["drift"] >= 0 and m["jitter"] >= 0 and 0 < m["intensity"] <= 1
-        ps.append(e.calculate_channel_error(**m))
-    assert len(ps) == 120
-    assert min(ps) < 0.04 and max(ps) > 0.11  # calm and abort phases both present
+def test_missing_field_rejected():
+    d = dict(EXAMPLE)
+    del d["residual_mrad"]
+    with pytest.raises(ValueError, match="missing"):
+        TelemetryMessage.from_dict(d)
+
+
+def test_locked_property():
+    assert msg(state="TRACK").locked and msg(state="COAST").locked and not msg(state="SEARCH").locked
+
+
+def test_csv_round_trip(tmp_path):
+    msgs = [msg(i / 120, rx_signal=None, rx_background=None) for i in range(5)]
+    msgs.append(msg(5 / 120, rx_signal=0.5, rx_background=0.1))
+    p = tmp_path / "t.csv"
+    write_csv(str(p), msgs)
+    back = CSVReplaySource(str(p))
+    assert len(list(back)) == 6 and back.duration == pytest.approx(5 / 120, abs=1e-4)
+    assert list(back)[0].rx_signal is None and list(back)[-1].rx_signal == pytest.approx(0.5)
+
+
+def test_csv_rejects_bad_files(tmp_path):
+    p = tmp_path / "bad.csv"
+    p.write_text("t,state\n0,TRACK\n")
+    with pytest.raises(ValueError, match="missing column"):
+        CSVReplaySource(str(p))
+    write_csv(str(p), [msg(1.0), msg(0.5)])
+    with pytest.raises(ValueError, match="increasing"):
+        CSVReplaySource(str(p))
+
+
+def test_default_data_file_is_valid():
+    import os
+    src = CSVReplaySource(os.path.join(os.path.dirname(__file__), "..", "data", "fake_telemetry.csv"))
+    assert src.duration > 100
+
+
+def test_zmq_telemetry_and_control_round_trip():
+    ep, cep = "tcp://127.0.0.1:35561", "tcp://127.0.0.1:35562"
+    pub = ZmqPublisher(ep)
+    sub = ZmqSubscriber(ep, timeout_s=1.0)
+    cpub = ControlPublisher(cep)
+    csub = ControlSubscriber(cep)
+    try:
+        time.sleep(0.4)  # PUB/SUB slow joiner
+        sent = [msg(i / 120) for i in range(3)]
+        for m in sent:
+            pub.send(m)
+        got = []
+        for m in sub:
+            got.append(m)
+            if len(got) == 3:
+                break
+        assert got == sent
+        cpub.send_reacquire("abort")
+        time.sleep(0.2)
+        assert csub.poll() == [{"cmd": "reacquire", "reason": "abort"}]
+        assert csub.poll() == []
+    finally:
+        for o in (pub, sub, cpub, csub):
+            o.close()

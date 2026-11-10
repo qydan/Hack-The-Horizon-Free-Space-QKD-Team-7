@@ -6,10 +6,13 @@ those pulses and learns the bit without adding any QBER. Decoy states defend by 
 Alice randomly vary the pulse intensity (signal mu, decoy nu, vacuum 0); Bob's counts per
 intensity class must follow the Poisson/yield model, which a PNS attacker cannot fake.
 
-Channel model, driven by the physical telemetry:
-    eta   = eta0 * intensity       (link transmittance; beacon brightness is the proxy)
-    e_d   = p_error                (optical error, from drift/jitter/intensity transfer fn)
-    Y0    = dark-count yield
+Channel model. In the sandbox (``channel.simulate_message``) the inputs come from the
+error budget, which is driven by the measured telemetry:
+    eta   = transmittance x detector efficiency (``error_budget.transmittance``)
+    e_d   = optical error ``e_opt`` (raised by the Eve emulator's intercept-resend)
+    Y0    = dark-count + background probability per pulse
+
+Standalone (``run_decoy_analysis``, used by the tests) eta defaults to ``eta0 * intensity``.
 
     yield of an n-photon pulse     Y_n = Y0 + (1 - Y0)(1 - (1 - eta)^n)
     gain of intensity lambda       Q_l = sum_n Poisson(n; l) * Y_n
@@ -34,10 +37,10 @@ class DecoyParams:
     nu: float = 0.1            # weak decoy mean photon number
     p_signal: float = 0.7      # fraction of pulses sent as signal
     p_decoy: float = 0.2       # fraction sent as decoy (remainder is vacuum)
-    eta0: float = 0.05         # transmittance at intensity == 1.0
+    eta0: float = 0.05         # standalone only: transmittance at intensity == 1.0 (the sandbox passes eta)
     dark_yield: float = 2e-4   # Y0
     k_sigma: float = 5.0       # statistical margin
-    n_pulses: int = 20_000_000  # pulses per window (e.g. 20 MHz source x 1 s)
+    n_pulses: int = 20_000_000  # standalone only: pulses per window (the sandbox passes pulse_rate x dt)
 
 
 @dataclass
@@ -86,7 +89,8 @@ def class_statistics(params: DecoyParams, lam: float, eta: float, p_error: float
 
 
 def simulate(params: DecoyParams, intensity: float, p_error: float,
-             pns_attack: bool = False, rng: Optional[np.random.Generator] = None) -> Dict[str, Dict[str, int]]:
+             pns_attack: bool = False, rng: Optional[np.random.Generator] = None,
+             eta: Optional[float] = None, n_pulses: Optional[int] = None) -> Dict[str, Dict[str, int]]:
     """Simulate one window of decoy-state pulses. Returns {class: {"sent", "detected", "errors"}}.
 
     Counts are drawn from their exact binomial distributions, which is statistically
@@ -94,12 +98,16 @@ def simulate(params: DecoyParams, intensity: float, p_error: float,
     (``params.n_pulses``, e.g. a 20 MHz source over a 1 s window).
 
     ``pns_attack``: photon-number-splitting attacker, see ``class_statistics``.
+    ``eta`` overrides the transmittance (default ``eta0 * intensity``); in the sandbox it
+    comes from the error budget. ``n_pulses`` overrides ``params.n_pulses``.
     """
     rng = rng or np.random.default_rng()
-    eta = params.eta0 * float(np.clip(intensity, 0.0, 1.0))
+    if eta is None:
+        eta = params.eta0 * float(np.clip(intensity, 0.0, 1.0))
+    n_total = params.n_pulses if n_pulses is None else n_pulses
     p_error = float(np.clip(p_error, 0.0, 0.5))
     probs = [params.p_signal, params.p_decoy, 1.0 - params.p_signal - params.p_decoy]
-    sent = rng.multinomial(params.n_pulses, probs)
+    sent = rng.multinomial(n_total, probs)
     out = {}
     for idx, (name, lam) in enumerate((("signal", params.mu), ("decoy", params.nu), ("vacuum", 0.0))):
         st = class_statistics(params, lam, eta, p_error, pns_attack)
@@ -117,8 +125,13 @@ def _lower(count: int, total: int, k: float) -> float:
     return max(0.0, count - k * math.sqrt(count + 1.0)) / total
 
 
-def analyze(params: DecoyParams, counts: Dict[str, Dict[str, int]], eta_expected: float) -> DecoyResult:
-    """Vacuum + weak-decoy bounds on the single-photon yield, error rate and fraction."""
+def analyze(params: DecoyParams, counts: Dict[str, Dict[str, int]], eta_expected: float,
+            expected_gain_by_class: Optional[Dict[str, float]] = None) -> DecoyResult:
+    """Vacuum + weak-decoy bounds on the single-photon yield, error rate and fraction.
+
+    ``expected_gain_by_class`` ({"signal": Q, "decoy": Q}) overrides the no-attack model
+    used by the consistency check. Needed when the transmittance varied during the block
+    (the mean of 1 - exp(-eta*lam) is not 1 - exp(-mean(eta)*lam))."""
     mu, nu, k = params.mu, params.nu, params.k_sigma
     s, d, v = counts["signal"], counts["decoy"], counts["vacuum"]
 
@@ -153,7 +166,8 @@ def analyze(params: DecoyParams, counts: Dict[str, Dict[str, int]], eta_expected
     consistent = True
     notes = []
     for name, lam, c in (("signal", mu, s), ("decoy", nu, d)):
-        exp_q = expected_gain(params, lam, eta_expected)
+        exp_q = (expected_gain_by_class[name] if expected_gain_by_class
+                 else expected_gain(params, lam, eta_expected))
         lo = _lower(c["detected"], c["sent"], k + 2)
         hi = _upper(c["detected"], c["sent"], k + 2)
         if not (lo <= exp_q <= hi):

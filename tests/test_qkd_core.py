@@ -3,13 +3,12 @@ import hashlib
 import numpy as np
 import pytest
 
-from conftest import CALM, FAN_ON, QBER_GATE
+from conftest import P_CALM, P_NOISY, QBER_GATE
 from qkd_core import QuantumCryptoEngine
 
 
-def run_cycle(engine, metrics):
+def run_cycle(engine, p):
     """One full pipeline pass. Returns (p_error, qber, key_or_None, status)."""
-    p = engine.calculate_channel_error(**metrics)
     a, ab, b, bb = engine.generate_and_transmit(p)
     qber, ar, br = engine.sift_and_estimate(a, ab, b, bb)
     if qber >= QBER_GATE:
@@ -19,55 +18,6 @@ def run_cycle(engine, metrics):
     except ValueError:
         return p, qber, None, "reconcile_fail"
 
-
-# ---------- transfer function ----------
-
-class TestChannelError:
-    def test_zero_telemetry_hits_floor(self, engine):
-        # intensity=1, no drift/jitter -> e_optical + gamma
-        assert engine.calculate_channel_error(0, 0, 1.0) == pytest.approx(
-            engine.e_optical + engine.gamma)
-
-    @pytest.mark.parametrize("field", ["drift", "jitter"])
-    def test_monotonic_increasing(self, engine, field):
-        vals = [engine.calculate_channel_error(**{**CALM, field: v}) for v in (0, 5, 20, 80)]
-        assert vals == sorted(vals) and vals[0] < vals[-1]
-
-    def test_monotonic_decreasing_in_intensity(self, engine):
-        vals = [engine.calculate_channel_error(**{**CALM, "intensity": v}) for v in (0.1, 0.4, 0.7, 1.0)]
-        assert vals == sorted(vals, reverse=True)
-
-    def test_caps_at_50_percent(self, engine):
-        assert engine.calculate_channel_error(1e6, 1e6, 0.01) == 0.5
-
-    @pytest.mark.parametrize("bad", [0.0, -1.0, 1e-12])
-    def test_intensity_floor_prevents_div_by_zero(self, engine, bad):
-        p = engine.calculate_channel_error(0, 0, bad)
-        assert np.isfinite(p) and 0 < p <= 0.5
-
-    def test_intensity_above_one_is_clamped(self, engine):
-        assert engine.calculate_channel_error(0, 0, 5.0) == engine.calculate_channel_error(0, 0, 1.0)
-
-    def test_calibration_targets(self, engine):
-        """docs/calibration_log.md: ~3% calm, >11% with fan."""
-        assert 0.02 <= engine.calculate_channel_error(**CALM) <= 0.05
-        assert engine.calculate_channel_error(**FAN_ON) > QBER_GATE
-
-    @pytest.mark.xfail(reason="gamma not yet calibrated against measured telemetry "
-                              "(needs gamma >~ 0.02); see docs/calibration_log.md", strict=False)
-    def test_obstruction_trips_gate(self, engine):
-        """Hand over the lens: intensity 0.95 -> 0.20 should spike above the gate."""
-        p = engine.calculate_channel_error(2.5, 1.0, 0.20)
-        assert p > QBER_GATE, f"p_error={p:.3f}; increase gamma"
-
-    @pytest.mark.parametrize("bad", [float("nan")])
-    def test_nan_input_does_not_silently_pass(self, engine, bad):
-        # NaN telemetry (dead sensor) must not produce a "safe" number
-        p = engine.calculate_channel_error(bad, 0, 1.0)
-        assert np.isnan(p) or p >= QBER_GATE
-
-
-# ---------- transmission ----------
 
 class TestTransmit:
     def test_shapes_and_binary_values(self, engine):
@@ -263,7 +213,7 @@ class TestPrivacyAmplification:
 
 class TestReconcileAndAmplify:
     def test_calm_block_yields_matching_key_and_report(self, engine):
-        p = engine.calculate_channel_error(**CALM)
+        p = P_CALM
         qber, ar, br = engine.sift_and_estimate(*engine.generate_and_transmit(p))
         key = engine.reconcile_and_amplify(ar, br, qber=qber, sample_size=len(ar) // 4)
         assert len(key) == 64
@@ -287,7 +237,7 @@ class TestReconcileAndAmplify:
             keys = set()
             for _ in range(2):
                 e = QuantumCryptoEngine()
-                p = e.calculate_channel_error(**CALM)
+                p = P_CALM
                 q, ar, br = e.sift_and_estimate(*e.generate_and_transmit(p))
                 keys.add(e.reconcile_and_amplify(ar, br, qber=q, sample_size=len(ar) // 4))
             assert len(keys) == 2
@@ -301,29 +251,29 @@ class TestEndToEnd:
     N = 60
 
     def test_calm_channel_mostly_accepted(self, engine):
-        results = [run_cycle(engine, CALM)[3] for _ in range(self.N)]
+        results = [run_cycle(engine, P_CALM)[3] for _ in range(self.N)]
         assert results.count("abort") / self.N < 0.01, "false aborts in calm conditions"
 
-    def test_fan_on_always_aborts(self, engine):
-        results = [run_cycle(engine, FAN_ON)[3] for _ in range(self.N)]
+    def test_noisy_channel_always_aborts(self, engine):
+        results = [run_cycle(engine, P_NOISY)[3] for _ in range(self.N)]
         assert results.count("abort") / self.N > 0.99, "insecure keys escaping under turbulence"
 
     def test_calm_channel_produces_keys(self, engine):
         """Reconciliation should succeed at ~3% QBER, otherwise the demo shows no keys."""
-        results = [run_cycle(engine, CALM)[3] for _ in range(self.N)]
+        results = [run_cycle(engine, P_CALM)[3] for _ in range(self.N)]
         rate = results.count("key") / self.N
         assert rate > 0.9, f"only {rate:.0%} of calm cycles yield a key"
 
     def test_no_key_ever_issued_above_gate_true_error_rate(self, engine):
         """Whenever a key is issued, the true (unsampled) error rate must be below the gate."""
         for _ in range(self.N):
-            p = engine.calculate_channel_error(**FAN_ON)
+            p = P_NOISY
             a, ab, b, bb = engine.generate_and_transmit(p)
             qber, ar, br = engine.sift_and_estimate(a, ab, b, bb)
             if qber < QBER_GATE:
                 assert np.mean(ar != br) < QBER_GATE + 0.05
 
     def test_keys_differ_between_runs(self, engine):
-        keys = {k for _, _, k, s in (run_cycle(engine, CALM) for _ in range(30)) if k}
+        keys = {k for _, _, k, s in (run_cycle(engine, P_CALM) for _ in range(30)) if k}
         assert keys, "no keys produced"
         assert len(keys) > 1, "identical key issued repeatedly"

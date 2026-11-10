@@ -8,10 +8,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from qkd_core import QuantumCryptoEngine  # noqa: E402
 
-QBER_GATE = 0.11  # abort threshold used by demo_runner.py
+QBER_GATE = 0.11  # abort threshold
 
-CALM = {"drift": 2.5, "jitter": 1.0, "intensity": 0.9}
-FAN_ON = {"drift": 35.0, "jitter": 50.0, "intensity": 0.25}
+# Channel error probabilities for the engine-level BB84 tests (the sandbox derives the real
+# ones from telemetry through the error budget; see test_error_budget.py / test_sandbox.py)
+P_CALM = 0.03
+P_NOISY = 0.20
 
 
 @pytest.fixture(autouse=True)

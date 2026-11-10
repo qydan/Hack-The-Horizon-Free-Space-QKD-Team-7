@@ -2,79 +2,75 @@ import json
 import os
 import subprocess
 import sys
-
-import pytest
-
-import demo_runner
-from conftest import CALM, FAN_ON
-from decoy import DecoyParams
-from key_pool import KeyPool
-from qkd_core import QuantumCryptoEngine
+import time
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
+PY = sys.executable
 
 
-def test_calm_window_issues_key(engine):
-    rec = demo_runner.process_window(engine, CALM)
-    assert rec["outcome"] == "key" and len(rec["key"]) == 64 and rec["qber"] < 0.11
+def run(*args, timeout=300):
+    return subprocess.run([PY, os.path.join(ROOT, "src", "demo_runner.py"), *args],
+                          capture_output=True, text=True, cwd=ROOT, timeout=timeout)
 
 
-def test_fan_window_aborts(engine):
-    assert demo_runner.process_window(engine, FAN_ON)["outcome"] == "abort"
-
-
-def test_eve_forces_abort(engine):
-    assert demo_runner.process_window(engine, CALM, eve=1.0)["outcome"] == "abort"
-
-
-def test_pns_rejected_by_decoy_layer_even_when_qber_looks_fine():
-    e = QuantumCryptoEngine(block_size=65536)
-    rec = demo_runner.process_window(e, CALM, decoy_params=DecoyParams(), pns=True)
-    assert rec["outcome"] == "decoy_reject" and rec["qber"] < 0.11
-
-
-def test_decoy_without_attack_can_issue_key():
-    e = QuantumCryptoEngine(block_size=65536)
-    rec = demo_runner.process_window(e, CALM, decoy_params=DecoyParams(), pns=False)
-    assert rec["outcome"] == "key" and rec["decoy"]["consistent"]
-
-
-def test_pooling_outcome():
-    e = QuantumCryptoEngine(block_size=32768)
-    pool = KeyPool(e)
-    metrics = {"drift": 10.0, "jitter": 20.0, "intensity": 0.7}   # ~8% error: single blocks fail
-    outcomes = [demo_runner.process_window(e, metrics, pool=pool)["outcome"] for _ in range(14)]
-    assert "pooling" in outcomes and "key" in outcomes
-
-
-def run_cli(*args):
-    return subprocess.run([sys.executable, os.path.join(ROOT, "src", "demo_runner.py"), *args],
-                          capture_output=True, text=True, cwd=ROOT, timeout=120)
-
-
-def test_cli_csv_run_and_dashboard(tmp_path):
-    log = tmp_path / "run.jsonl"
-    r = run_cli("--source", "csv", "--quiet", "--log", str(log))
+def test_csv_run_log_and_dashboard(tmp_path):
+    log, keys = tmp_path / "run.jsonl", tmp_path / "keys.jsonl"
+    r = run("--source", "csv", "--quiet", "--log", str(log), "--keys-out", str(keys))
     assert r.returncode == 0 and "DONE" in r.stdout
     rows = [json.loads(l) for l in log.read_text().splitlines()]
-    assert len(rows) == 120 and {"p_error", "qber", "outcome", "drift"} <= set(rows[0])
+    blocks = [x for x in rows if x["kind"] == "block"]
+    assert len(blocks) >= 110 and any(x["kind"] == "interval" for x in rows)
+    outcomes = {b["outcome"] for b in blocks}
+    assert "key" in outcomes and "abort" in outcomes          # fan phases give keys, the gust aborts
+    assert len(keys.read_text().splitlines()) == sum(b["outcome"] == "key" for b in blocks)
 
     out = tmp_path / "dash.html"
-    d = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make_dashboard.py"), str(log), str(out)],
+    d = subprocess.run([PY, os.path.join(ROOT, "tools", "make_dashboard.py"), str(log), str(out)],
                        capture_output=True, text=True)
-    assert d.returncode == 0
+    assert d.returncode == 0, d.stderr
     html = out.read_text()
-    assert html.startswith("<!doctype html>") and "<svg" in html and "Keys issued" in html
+    assert html.startswith("<!doctype html>") and "<svg" in html and "Two error bars" in html
 
 
-def test_cli_mock_default_runs():
-    r = run_cli()
-    assert r.returncode == 0 and "DONE" in r.stdout
+def test_eve_aborts_every_block():
+    r = run("--source", "csv", "--eve", "0.5", "--quiet")
+    assert r.returncode == 0 and "0 keys in the key store" in r.stdout and " key" not in r.stdout.split("DONE")[1].split("\n")[0]
 
 
-def test_summarize_telemetry_tool(tmp_path):
-    p = tmp_path / "t.csv"
-    p.write_text("timestamp,drift,jitter,intensity\n0,100,0,0.1\n1,2,1,0.9\n2,4,1,0.9\n")
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "summarize_telemetry.py"),
-                        "--skip", "1", str(p), str(p)], capture_output=True, text=True)
-    assert r.returncode == 0 and "drift=3.00px" in r.stdout and "tune.py --calm 3.00" in r.stdout
+def test_pns_is_caught_by_decoy_states():
+    r = run("--source", "csv", "--pns", "--quiet")
+    assert "decoy_abort" in r.stdout and "0 keys in the key store" in r.stdout
+
+
+def test_record_and_replay(tmp_path):
+    rec = tmp_path / "rec.csv"
+    r = run("--source", "csv", "--quiet", "--record", str(rec))
+    assert r.returncode == 0 and rec.exists()
+    r2 = run("--source", "csv", "--csv", str(rec), "--quiet")
+    assert r2.returncode == 0 and "DONE" in r2.stdout
+
+
+def test_generate_fake_telemetry_tool(tmp_path):
+    out = tmp_path / "t.csv"
+    r = subprocess.run([PY, os.path.join(ROOT, "tools", "generate_fake_telemetry.py"), "--out", str(out),
+                        "--duration", "10"], capture_output=True, text=True)
+    assert r.returncode == 0 and len(out.read_text().splitlines()) == 1201
+
+
+def test_dose_response_tool_prints_both_error_bars():
+    r = subprocess.run([PY, os.path.join(ROOT, "tools", "tune.py")], capture_output=True, text=True)
+    assert r.returncode == 0 and "Ground residual" in r.stdout and "Drone lean" in r.stdout and "<- gate" in r.stdout
+
+
+def test_two_programs_over_zeromq():
+    """Tracker and sandbox as separate processes, joined only by the telemetry stream (and the
+    abort / re-acquire command back)."""
+    sb = subprocess.Popen([PY, os.path.join(ROOT, "src", "demo_runner.py"), "--source", "zmq", "--quiet",
+                           "--timeout", "30"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=ROOT)
+    time.sleep(2.0)
+    tr = subprocess.run([PY, os.path.join(ROOT, "src", "tracker.py"), "--source", "sim", "--duration", "8"],
+                        capture_output=True, text=True, cwd=ROOT, timeout=200)
+    out, err = sb.communicate(timeout=120)
+    assert tr.returncode == 0 and "first lock after" in tr.stdout, tr.stderr
+    assert sb.returncode == 0, err
+    assert "DONE" in out and "key" in out

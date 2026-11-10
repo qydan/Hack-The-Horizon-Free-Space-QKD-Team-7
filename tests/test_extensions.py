@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from conftest import CALM
+from conftest import P_CALM
 from decoy import DecoyParams, run_decoy_analysis
 from key_pool import KeyPool
 from qkd_core import QuantumCryptoEngine
@@ -29,13 +29,13 @@ class TestInterceptResend:
         assert sifted_qber(e, 0.0, f) == pytest.approx(0.25 * f, abs=0.01)
 
     def test_eve_forces_abort_on_otherwise_calm_channel(self, engine):
-        p = engine.calculate_channel_error(**CALM)
+        p = P_CALM
         qber, _, _ = engine.sift_and_estimate(*engine.generate_and_transmit(p, eve_fraction=1.0))
         assert qber > 0.11
 
     def test_small_eve_can_hide_below_gate(self, engine):
         """Documenting the limit: a 10% intercept adds only ~2.5% QBER and stays under the gate."""
-        p = engine.calculate_channel_error(**CALM)
+        p = P_CALM
         qber, _, _ = engine.sift_and_estimate(*engine.generate_and_transmit(p, eve_fraction=0.1))
         assert qber < 0.11
 
@@ -78,7 +78,7 @@ class TestDecoyPNS:
         assert decoy < base
 
     def test_pipeline_refuses_key_under_pns(self, engine):
-        p = engine.calculate_channel_error(**CALM)
+        p = P_CALM
         qber, ar, br = engine.sift_and_estimate(*engine.generate_and_transmit(p))
         bad = self.run(pns=True)
         with pytest.raises(ValueError, match="Insufficient"):
@@ -88,7 +88,7 @@ class TestDecoyPNS:
         # Decoy accounting discards the multi-photon share, so a 32k block is marginal;
         # a 64k block (or pooling several windows) has comfortable margin.
         engine = QuantumCryptoEngine(block_size=65536)
-        p = engine.calculate_channel_error(**CALM)
+        p = P_CALM
         qber, ar, br = engine.sift_and_estimate(*engine.generate_and_transmit(p))
         good = self.run(pns=False)
         key = engine.reconcile_and_amplify(ar, br, qber=qber, sample_size=len(ar) // 4, decoy=good)

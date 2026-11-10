@@ -9,9 +9,10 @@ class KeyPool:
     """Accumulates sifted bits from accepted (QBER < gate) windows and distills a key
     from the pool once enough secret bits are available.
 
-    Finite-size effects make a single 32k-pulse block yield no key above roughly 6-7% QBER.
-    Pooling several windows shrinks the statistical margin and amortises the fixed
-    leakage, so moderately noisy conditions still produce keys (just less often).
+    Finite-size effects make a single block yield no key well below the 11% gate (about
+    5% QBER for the sandbox's default 1 s block, see the README). Pooling several windows
+    shrinks the statistical margin and amortises the fixed leakage, so moderately noisy
+    conditions still produce keys (just less often).
     """
 
     def __init__(self, engine: QuantumCryptoEngine, max_bits: int = 400_000):
