@@ -420,6 +420,11 @@ class VideoCaptureSource:
             self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)      # DirectShow manual
             self.cap.set(cv2.CAP_PROP_EXPOSURE, manual_exposure)
 
+    def restart(self, duration: Optional[float] = None) -> None:
+        """Restart the capture clock with a new run length (e.g. after a calibration pass)."""
+        self.duration = duration
+        self._t0 = None
+
     def read(self):
         ok, frame = self.cap.read()
         if not ok:

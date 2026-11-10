@@ -25,7 +25,7 @@ Two programs, one laptop, joined only by the telemetry stream (ZeroMQ on localho
 
 A DJI Mini 2 SE hovers in front of a fan carrying a beacon. No DJI SDK or drone telemetry is used: everything is measured from the ground, so a commercial ground station works with any vendor's drone. Hardware only; the software stand-in is `src/sim.py` (`SimRig`: wind-blown drone, 13 Hz beacon, room lights, camera, gimbal).
 
-Beacon: 100% / 40% blink at 13 Hz (never fully off), IR 850 nm or red, or retroreflective tape with a ring light. An AprilTag on the drone gives its tilt.
+Beacon: on the real rig a constantly-lit red LED (or retroreflective tape with a steady ring light), found as the brightest small spot. The simulation uses a 100% / 40% blink at 13 Hz (120 fps) with lock-in detection. An optional AprilTag on the drone gives its tilt and range (`tracker.py --tag-size`). Nothing in the demo uses infrared.
 
 ## Ground segment (`src/tracker.py`, `src/vision.py`, `src/gimbal.py`)
 
@@ -38,7 +38,7 @@ Beacon: 100% / 40% blink at 13 Hz (never fully off), IR 850 nm or red, or retror
 
 The drone's direction is the gimbal encoder angle plus where the spot sits in the image. Calibration (`GroundTracker.calibrate`, `tracker.Calibration`) records the calm-hover boresight and the full-signal beacon brightness.
 
-Frame rate and blink rate go together: the defaults (13 Hz, 120 fps) are for the simulated rig. The real rig is a DJI Osmo Action 5 Pro at 30 fps with a red LED blinking at 7.5 Hz (`--fps 30 --blink-hz 7.5`).
+The defaults (13 Hz blink, 120 fps, lock-in) are for the simulated rig. The real rig is a DJI Osmo Action 5 Pro at 30 fps with a steady red LED (`--fps 30 --beacon steady`), so there is no blink rate to match.
 
 ### Real camera, fixed mount (`tracker.py --source camera`)
 
@@ -47,7 +47,7 @@ This is what runs on hardware today. The camera does not move (`FixedGimbal`), s
 The residual (receiver pointing error) is measured against a **virtual mount**: a `SimGimbal` (`TrackerConfig.virtual_mount`, on by default for the camera) that the tracker steers from its Kalman prediction exactly as it would a real gimbal, with `mount_latency_s` = 60 ms (servo loop plus the frame interval and exposure at 30 fps), 1.53 mrad steps and a slew limit. Residual = measured direction minus the mount's angle, so the mount follows the slow wander away and only the fast motion it cannot track, plus lag and step size, is charged as pointing error. In a 20 s windy sim at 30 fps this takes the mean residual from 12.8 to 1.4 mrad and leaves drift and jitter unchanged. The residual is therefore a model of a mount, not a hardware measurement; say so when presenting. `--no-virtual-mount` restores the raw image-centre offset.
 
 * No search detector and no steering: the beacon is acquired anywhere in view (`TrackerConfig.fixed_camera`), or only inside `--zone x0,y0,x1,y1` so lamps and windows outside it cannot steal the lock.
-* `--beacon blink` (default) uses the lock-in detector; `--beacon steady` finds a constantly-lit LED as the brightest small spot (`vision.SteadySpotDetector`), which needs a dark scene.
+* `--beacon blink` (default) uses the lock-in detector; `--beacon steady` (used on the real rig) finds a constantly-lit LED as the brightest small spot (`vision.SteadySpotDetector`), which needs a dim scene and gives no protection against other bright spots except `--zone`.
 * `--calibrate N` records the boresight and full-signal brightness over N seconds of calm hover and saves `calibration.json`; later runs load it.
 * `gimbal_lag_mrad` is the virtual mount's commanded-minus-actual angle.
 * No pose estimator is wired in, so `lean_deg` is 0 and `range_m` is `nominal_range_m` (3 m). The drone-lean error bar stays empty on the real rig.
@@ -60,19 +60,17 @@ One JSON message per camera frame:
 
 ```json
 {"t": 12.508, "state": "TRACK", "drift_mrad": 3.1, "jitter_mrad": 0.8, "residual_mrad": 0.4,
- "gimbal_lag_mrad": 0.3, "lean_deg": 4.2, "range_m": 3.05, "intensity": 0.92,
- "rx_signal": 0.88, "rx_background": 0.04}
+ "gimbal_lag_mrad": 0.3, "lean_deg": 4.2, "range_m": 3.05, "intensity": 0.92}
 ```
 
 | Field | Meaning | How |
 |---|---|---|
 | drift | slow wander (< 0.5 Hz) | low-pass of the drone direction vs the calibrated boresight |
 | jitter | fast shaking | RMS of the > 0.5 Hz part over 1 s |
-| residual | ground pointing error | spot distance from the image centre (0 while coasting or searching) |
+| residual | ground pointing error | spot direction minus the gimbal (or virtual mount) angle (0 while coasting or searching) |
 | gimbal lag | part of the residual from the gimbal falling behind | commanded minus encoder angle |
 | intensity | beacon brightness | lock-in amplitude / calibration |
 | lean, range | drone tilt, distance | AprilTag pose |
-| rx_signal, rx_background | optional, only with the IR data link (I9) | photodiode, normalised to S_cal / B_cal |
 
 `TelemetryMessage` (schema + validation), `ZmqPublisher` / `ZmqSubscriber`, `CSVReplaySource`. No hardcoded values, no radio.
 
@@ -84,7 +82,6 @@ Each telemetry message passes through:
    - `eta_geo`: receiver lens area / beam spot area (about 31 dB at 5 m, 43 dB at 20 m).
    - `theta_rx` is the measured residual, so gimbal lag, step size and jitter are already inside it. `theta_fov` is a *virtual* 1/e^2 half-width (10 mrad) so a few mrad of ground error visibly costs signal.
    - `theta_tx = lean + drift / range` with a flat-topped `eta_tx` (about 1 inside +-5 deg).
-   - With the IR link, measured `rx_signal` replaces the two pointing factors and `rx_background` sets `p_bg`.
 2. **Channel + decoys** (`src/channel.py`, `src/decoy.py`): each pulse is signal / decoy / vacuum (70 / 20 / 10%, `mu` = 0.5, `nu` = 0.1), Poisson photon number, survival with `eta`, dark counts and a 2% optical error. Counts are drawn exactly (binomial) so a 1 GHz source is cheap.
 3. **Eve emulator** (`channel.EveConfig`): off by default; intercept-resend on a fraction of pulses, or PNS.
 4. **BB84 pipeline** (`src/qkd_core.py`): sifting, 20% QBER sample, Cascade error correction (leakage counted), Toeplitz privacy amplification to 256 bits. Pooling across blocks optional (`src/key_pool.py`).
@@ -113,13 +110,10 @@ Operating point: `default_params(on_axis_snr)` chooses `p_dark` so the on-axis s
 | I6 | Eve -> sandbox | `EveConfig`, `--eve`, `--pns` |
 | I7 | regulator -> system | flight rules, eye safety |
 | I8 | gate -> tracker | `reacquire` over ZeroMQ |
-| I9 | drone LED -> ground photodiode (optional) | `rx_signal`, `rx_background` fields |
 
 ## Not implemented (hardware or model files needed)
 
 * The real gimbal driver: `tracker.py --source camera` runs a fixed camera only (see above). A steered run needs a `Gimbal` subclass and a `build_*` function like `build_sim`.
 * A trained drone-detection ONNX model for `YoloDnnDetector` (only needed with a gimbal).
-* Pose on the real camera: `AprilTagPose` exists but is not passed to the tracker in camera mode, so lean and range are not measured there.
-* Exposure lock in `tracker.py --source camera`: it opens the camera with whatever exposure the driver has (`tools/camera_check.py` has `--exposure` and `--dialog`).
-* The IR data link hardware and its receiver reader (only the `rx_*` fields and the budget handling exist).
+* Pose on the real camera needs a printed AprilTag on the drone and `--tag-size`; without it lean is 0 and range is 3 m.
 * AprilTag pose is tested against projected tags, not a real camera.

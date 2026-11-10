@@ -38,7 +38,7 @@ def line_chart(rows, series, ymax, title, gate=None, h=170, w=640):
         pts = " ".join(f"{X(i):.1f},{Y(r[key]):.1f}" for i, r in enumerate(rows))
         out.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2"/>')
     t_end = rows[-1]["t"]
-    out.append(f'<text x="{pad_l}" y="{h-5}" class="ax">0 s</text>'
+    out.append(f'<text x="{pad_l}" y="{h-5}" class="ax">{rows[0]["t"]:g} s</text>'
                f'<text x="{w-pad_r}" y="{h-5}" text-anchor="end" class="ax">{t_end:g} s</text></svg>')
     legend = "".join(f'<span><i style="background:{c}"></i>{html.escape(l)}</span>' for _, l, c in series)
     return f'<figure><figcaption>{html.escape(title)}</figcaption>{"".join(out)}<div class="legend">{legend}</div></figure>'
@@ -88,23 +88,28 @@ figcaption{font-weight:600;margin-bottom:4px}svg{width:100%;height:auto;display:
 .grid{stroke:var(--grid)}.ax{fill:var(--muted);font-size:10px}.gate{stroke:var(--bad);stroke-dasharray:4 3}
 .gate-t{fill:var(--bad);font-size:10px}.legend{display:flex;gap:14px;font-size:12px;margin-top:4px;flex-wrap:wrap}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}
-</style></head><body><main><h1>QKD Run Dashboard</h1>
+</style></head><body><main id="m">__BODY__</main>__SCRIPT__</body></html>"""
+
+BODY = """<h1>QKD Run Dashboard__SUFFIX__</h1>
 <div class="stats">__STATS__</div>
 __CHARTS__
 <figure><figcaption>Gate decision per key block</figcaption>__STRIP__
 <div class="legend"><span><i style="background:var(--ok)"></i>key</span><span><i style="background:var(--bad)"></i>abort / decoy abort</span>
-<span><i style="background:var(--warn)"></i>pooling / no key / no link</span></div></figure>
-</main></body></html>"""
+<span><i style="background:var(--warn)"></i>pooling / no key / no link</span></div></figure>"""
 
 
-def main():
-    if len(sys.argv) != 3:
-        sys.exit(__doc__)
-    allrows = load(sys.argv[1])
+def body_html(allrows, window_s=None, suffix=""):
+    """The dashboard content for a list of run-log records. ``window_s`` keeps only the last
+    N seconds of the traces (live view). Returns None if there is nothing to draw yet."""
     trace = [r for r in allrows if r.get("kind") == "interval"]
     rows = [r for r in allrows if r.get("kind") == "block"]
     if not rows or not trace:
-        sys.exit("log has no interval/block records (use a log written by demo_runner.py)")
+        return None
+    all_rows = rows
+    if window_s is not None:
+        t0 = trace[-1]["t"] - window_s
+        trace = [r for r in trace if r["t"] >= t0]
+        rows = [r for r in rows if r["t"] >= t0] or rows[-1:]
     for r in trace:
         r["lean_mrad"] = r["lean_deg"] * 17.453     # degrees -> mrad, to compare with the ground residual
     top = max(10, max(max(r["residual_mrad"], r["lean_mrad"]) for r in trace))
@@ -122,8 +127,18 @@ def main():
                    max(30, min(60, max(r["eta_db"] for r in trace))), "Loss (dB)", h=110),
     ]
     stat_html = "".join(f'<div class="stat"><b>{html.escape(str(v))}</b><span>{html.escape(k)}</span></div>'
-                        for k, v in stats(rows, trace))
-    page = PAGE.replace("__STATS__", stat_html).replace("__CHARTS__", "".join(charts)).replace("__STRIP__", strip(rows))
+                        for k, v in stats(all_rows, trace))
+    return (BODY.replace("__SUFFIX__", html.escape(suffix)).replace("__STATS__", stat_html)
+            .replace("__CHARTS__", "".join(charts)).replace("__STRIP__", strip(rows)))
+
+
+def main():
+    if len(sys.argv) != 3:
+        sys.exit(__doc__)
+    body = body_html(load(sys.argv[1]))
+    if body is None:
+        sys.exit("log has no interval/block records (use a log written by demo_runner.py)")
+    page = PAGE.replace("__BODY__", body).replace("__SCRIPT__", "")
     with open(sys.argv[2], "w") as f:
         f.write(page)
     print(f"wrote {sys.argv[2]}")

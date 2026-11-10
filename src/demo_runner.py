@@ -31,7 +31,7 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 DEFAULT_CSV = os.path.join(ROOT, "data", "fake_telemetry.csv")
 
 
-def describe_block(rec: BlockRecord, quiet: bool) -> str:
+def describe_block(rec: BlockRecord) -> str:
     q = f"QBER={rec.qber * 100:.1f}% (budget {rec.qber_expected * 100:.1f}%)"
     if rec.outcome == "key":
         tail = f"KEY {rec.key[:16]}... ({rec.secret_bits} secret bits, {rec.leaked_bits} leaked)"
@@ -119,8 +119,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         for rec in sb.run(tap(source)):
             if log:
                 log.write(json.dumps(rec.__dict__) + "\n")
+                log.flush()                              # so tools/live_dashboard.py can follow the run
             if isinstance(rec, BlockRecord) and (not args.quiet or rec.outcome in ("key", "abort", "decoy_abort")):
-                print(describe_block(rec, args.quiet))
+                print(describe_block(rec))
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:

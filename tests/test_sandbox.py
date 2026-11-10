@@ -117,19 +117,6 @@ def test_pooling_blocks_still_works():
     assert {"pooling", "key"} & {r.outcome for r in recs}
 
 
-def test_ir_link_measured_signal_drives_the_channel():
-    """With the photodiode, the measured S/S_cal sets the transmittance (and a lamp adds noise)."""
-    def with_rx(sig, bg):
-        return [TelemetryMessage(i / 120, FINE_TRACK, 2.0, 0.5, 0.5, 0.3, 1.0, 3.0, 0.99, sig, bg)
-                for i in range(361)]
-    good = blocks(Sandbox(), with_rx(1.0, 0.0))
-    dim = [r for r in Sandbox().run(with_rx(0.05, 0.0)) if r.kind == "interval"]
-    lamp = [r for r in Sandbox().run(with_rx(1.0, 30.0)) if r.kind == "interval"]
-    assert all(r.outcome == "key" for r in good)
-    assert np.mean([r.qber_expected for r in dim]) > 0.05
-    assert np.mean([r.qber_expected for r in lamp]) > 0.05
-
-
 def test_intercept_resend_error_formula():
     assert intercept_resend_error(0.02, 0.0) == pytest.approx(0.02)
     assert intercept_resend_error(0.0, 1.0) == pytest.approx(0.25)

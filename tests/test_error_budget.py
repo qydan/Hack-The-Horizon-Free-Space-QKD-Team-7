@@ -66,21 +66,6 @@ class TestPointing:
         assert qber_estimate(P, b) == pytest.approx(0.5)
 
 
-class TestIRLink:
-    def test_measured_signal_replaces_the_pointing_factors(self):
-        """S/S_cal already contains every pointing loss; using both would count it twice."""
-        bad_pointing = m(res=15, lean=6, rx_signal=0.8, rx_background=0.0)
-        good_pointing = m(res=0, lean=0, rx_signal=0.8, rx_background=0.0)
-        assert transmittance(P, bad_pointing).eta == pytest.approx(transmittance(P, good_pointing).eta)
-        assert transmittance(P, good_pointing).eta == pytest.approx(0.8 * geometric_loss(P, 3.0))
-
-    def test_measured_background_raises_qber(self):
-        quiet = transmittance(P, m(rx_signal=1.0, rx_background=0.0))
-        lamp = transmittance(P, m(rx_signal=1.0, rx_background=30.0))
-        assert qber_estimate(P, lamp) > qber_estimate(P, quiet) + 0.05
-
-    def test_modelled_mode_has_zero_background(self):
-        assert transmittance(P, m()).p_bg == 0.0
 
 
 class TestQBER:

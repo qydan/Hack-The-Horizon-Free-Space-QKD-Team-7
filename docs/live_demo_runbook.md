@@ -3,19 +3,19 @@
 **Goal:** show the judges that the quality of the quantum key rises and falls with how well the ground station tracks a real, wind-blown drone.
 
 ## Pre-Flight Checklist (10 Minutes Before Demo)
-- [ ] Drone is powered on and the beacon is blinking and clearly visible on the camera feed.
+- [ ] Drone is powered on and the red LED is on and clearly visible on the camera feed.
 - [ ] Desk fan is plugged in, positioned, but **turned OFF**.
 - [ ] Camera checked and calibrated in calm hover (`docs/hardware_handoff.md`, steps 1-2); `calibration.json` is present.
 - [ ] Two terminals ready, sandbox first:
   `python src/demo_runner.py --source zmq --log run.jsonl --record demo.csv --keys-out keys.jsonl`
-  then `python src/tracker.py --source camera --fps 30 --blink-hz 7.5 --duration 120`.
+  then `python src/tracker.py --source camera --fps 30 --beacon steady --duration 120`.
 - [ ] Fallback ready: `python src/demo_runner.py --source csv --csv demo.csv` (a recorded run) or `python src/demo_runner.py` (simulated rig).
 
 ## The Pitch Script
 
 ### Step 1: The Baseline (Steady State)
 * **Action:** Start the sandbox, then the tracker. Keep the fan OFF.
-* **Speaker:** *"Judges, what you are seeing is the Cyber Sandbox. Our drone is hovering steadily. The ground camera has locked onto the drone's blinking beacon and measures its motion every frame. That measured motion is the only input to the key software. Because the tracking residual is low, our emulated Quantum Bit Error Rate (QBER) sits at about 3%. The pipeline is sifting bases, correcting errors and distilling 256-bit keys."*
+* **Speaker:** *"Judges, what you are seeing is the Cyber Sandbox. Our drone is hovering steadily. The ground camera has locked onto the drone's red LED beacon and measures its motion every frame. That measured motion is the only input to the key software. Because the tracking residual is low, our emulated Quantum Bit Error Rate (QBER) sits at about 3%. The pipeline is sifting bases, correcting errors and distilling 256-bit keys."*
 * **Visual:** Point to the terminal lines ending in `KEY ...`.
 
 ### Step 2a: Sustained Turbulence (keys keep flowing)
@@ -42,6 +42,7 @@
   * `python src/demo_runner.py --source csv --csv demo.csv --pns`: the PNS attacker keeps QBER near 3% and passes the QBER check, but the decoy statistics reject every block (`DECOY ABORT`).
 
 ### Afterwards
+* `python tools/live_dashboard.py run.jsonl` (start it after the sandbox, open http://127.0.0.1:8000) redraws the charts every second during the run.
 * `python tools/make_dashboard.py run.jsonl dashboard.html` gives the QBER trace against the gate, the two error bars (ground residual vs drone lean) and the gate decision per block.
 * `python tools/tune.py` prints the dose-response table (test T6).
 

@@ -7,12 +7,14 @@ This is what it needs from the rig and how to check it. A steered gimbal is not 
 ## What the software expects
 - One **fixed** camera at the laptop looking at the drone from about 3 m (`nominal_range_m`).
   It must not move after calibration.
-- A **blinking beacon** on the drone: a red LED, 100% / 40% at 7.5 Hz, never fully off (or
-  retroreflective tape with a blinking ring light). A constantly-lit LED also works with
-  `--beacon steady`, but only in a dark scene with no other small bright spots.
-- **Frame rate matched to the blink:** at least 4 frames per blink. The rig runs the Action 5 Pro
-  at 30 fps, so the blink is 7.5 Hz and every command passes `--fps 30 --blink-hz 7.5`. (13 Hz
-  needs about 60 fps or more; the simulated rig defaults to 120 fps.)
+- A **constantly-lit red LED** on the drone, tracked with `--beacon steady` (every `tracker.py`
+  command passes it; `camera_check.py` uses `--steady`). It is found as the brightest small
+  spot, so the scene must be dim with no other small bright spots in view (lamps, screens,
+  windows, reflections), and `--zone` should cover only where the drone hovers. A blinking
+  beacon would tolerate room lights, but this rig does not use one.
+- **Frame rate:** the rig runs the Action 5 Pro at 30 fps, so every command passes `--fps 30`.
+  There is no blink rate to match, so `--blink-hz` is not used. (The simulated rig defaults to
+  120 fps and a 13 Hz blink.)
 - **Locked exposure, gain and white balance.** Auto-exposure hides intensity changes and breaks
   the calibration. `tracker.py` does not set exposure itself: it is locked on the Action 5 Pro (or in the driver)
   (`tools/camera_check.py --exposure -9` or `--dialog`) and confirm with the check below.
@@ -24,10 +26,23 @@ python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 ```
 
+## Step 0: bench test with a hand-held LED (no drone)
+Hold the red LED about 3 m from the camera, roughly at the height of the lens, and move it the
+way the drone would: steady for calibration, then a slow sway and a faster shake. This exercises
+the whole chain (lock, drift, jitter, residual, key decisions); only the real drone motion and the
+fan are missing.
+- Use the commands in steps 1-4 as written (steady LED). Dim the room and add `--zone` around
+  where you will hold it, because anything else small and bright in view can steal the lock.
+- Hold it still for the 15 s calibration (`--calibrate 15`), then run the tracker with
+  `demo_runner.py --source zmq --log run.jsonl` and `tools/live_dashboard.py run.jsonl` open.
+  Sway slowly and the drift should rise; shake it and the jitter should rise. Cover the LED with a
+  hand and the state should drop to `COAST` then `SEARCH`.
+- A hand moves differently from a drone in wind, so do not take the thresholds from this test.
+
 ## Step 1: check the camera
 ```bash
 python tools/camera_check.py --device 0 --width 1920 --height 1080 --fps 30
-python tools/camera_check.py --device 0 --fps 30 --steady          # constantly-lit LED instead
+python tools/camera_check.py --device 0 --fps 30 --steady          # our beacon: a constantly-lit LED
 ```
 Three phases (frame rate, noise floor with the beacon off, beacon on). It prints OK / FIX lines
 and the settings to use: real fps, `min_amplitude`, and a first guess for `i_ref`. Fix every FIX
@@ -35,21 +50,21 @@ line before going on.
 
 ## Step 2: calibrate in calm hover
 ```bash
-python src/tracker.py --source camera --device 0 --fps 30 --blink-hz 7.5 --hfov 70 --calibrate 15 --duration 1
+python src/tracker.py --source camera --device 0 --fps 30 --beacon steady --hfov 70 --calibrate 15 --duration 1
 ```
 Hold the drone in calm hover with the beacon on. This saves `calibration.json` (boresight
-direction and full-signal beacon brightness); later runs load it automatically. Pass the fps,
-`--min-amplitude` and `--blink-hz` that step 1 reported, and the lens's real `--hfov`.
+direction and full-signal beacon brightness); later runs load it automatically. Pass the fps and
+`--min-amplitude` (grey levels the LED must stand above the background) that step 1 reported, and the lens's real `--hfov`.
 
 Useful options: `--zone 0.25,0.1,0.75,0.9` (only look for the beacon in the hover area, so
 lamps and windows cannot steal the lock), `--proc-width` (downscale for speed),
 `--max-jump-mrad`.
 
 ## Step 3: record three runs (about 30 s each, same distance, same lighting)
-Two terminals, sandbox first. The sandbox stops after 5 s without telemetry (`--timeout`).
+Two terminals, sandbox first. The sandbox waits for the first message, then stops after 5 s without telemetry (`--timeout`).
 ```bash
 python src/demo_runner.py --source zmq --quiet --record calm.csv
-python src/tracker.py --source camera --fps 30 --blink-hz 7.5 --duration 30
+python src/tracker.py --source camera --fps 30 --beacon steady --duration 30
 ```
 - `calm.csv`: fan off, drone hovering.
 - `fan.csv`: fan on at the setting you plan to demo.
@@ -62,7 +77,8 @@ tell us where the operating point sits (`python tools/tune.py`).
 ## Step 4: rehearse the demo
 ```bash
 python src/demo_runner.py --source zmq --log run.jsonl --record demo.csv --keys-out keys.jsonl
-python src/tracker.py --source camera --fps 30 --blink-hz 7.5 --duration 120
+python src/tracker.py --source camera --fps 30 --beacon steady --duration 120
+python tools/live_dashboard.py run.jsonl        # optional, live charts at http://127.0.0.1:8000 while it runs
 python tools/make_dashboard.py run.jsonl dashboard.html
 ```
 Targets: first lock under 60 s (the tracker prints it at the end), tracking held for the full

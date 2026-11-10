@@ -40,14 +40,14 @@ def main():
     print(f"{'residual mrad':>14} {'loss dB':>9} {'QBER':>7}")
     for res in (0, 1, 2, 3, 4, 5, 6, 8, 10, 15):
         b = transmittance(p, msg(res, 0, rng=a.range))
-        print(f"{res:>14} {lin_to_db(b.eta / b.eta_geo):>9.1f} {qber_estimate(p, b):>7.1%}"
+        print(f"{res:>14} {lin_to_db(b.eta / b.eta_geo) + 0.0:>9.1f} {qber_estimate(p, b):>7.1%}"
               + ("  <- gate" if qber_estimate(p, b) >= QBER_GATE else ""))
 
     print("\nDrone lean (ground residual 0.7 mrad):")
     print(f"{'lean deg':>14} {'loss dB':>9} {'QBER':>7}")
     for lean in (0, 1, 2, 3, 4, 4.5, 5, 5.5, 6, 8):
         b = transmittance(p, msg(0.7, lean, rng=a.range))
-        print(f"{lean:>14} {lin_to_db(b.eta / b.eta_geo):>9.1f} {qber_estimate(p, b):>7.1%}"
+        print(f"{lean:>14} {lin_to_db(b.eta / b.eta_geo) + 0.0:>9.1f} {qber_estimate(p, b):>7.1%}"
               + ("  <- gate" if qber_estimate(p, b) >= QBER_GATE else ""))
 
     if a.run:

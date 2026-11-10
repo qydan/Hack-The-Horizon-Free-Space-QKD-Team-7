@@ -373,7 +373,7 @@ def build_camera(args):
     from gimbal import FixedGimbal
     from vision import VideoCaptureSource
     backend = cv2.CAP_DSHOW if sys.platform == "win32" else None
-    src = VideoCaptureSource(args.device, args.cap_width, args.cap_height, args.fps, manual_exposure=None,
+    src = VideoCaptureSource(args.device, args.cap_width, args.cap_height, args.fps, manual_exposure=args.exposure,
                              backend=backend, proc_width=args.proc_width, duration=args.duration)
     first = src.read()
     if first is None:
@@ -389,20 +389,22 @@ def build_camera(args):
                         max_jump_mrad=args.max_jump_mrad, steady_beacon=args.beacon == "steady",
                         spot_max_area=max(50, round(600 * (w / 960) ** 2)),
                         search_zone=tuple(float(v) for v in args.zone.split(",")) if args.zone else None)
-    tracker = GroundTracker(cam, FixedGimbal(), config=cfg)
+    pose_fn = None
+    if args.tag_size:
+        from vision import AprilTagPose
+        pose_fn = AprilTagPose(cam, args.tag_size)
+    tracker = GroundTracker(cam, FixedGimbal(), pose_fn=pose_fn, config=cfg)
     print(f"camera {w}x{h} at {args.hfov:.0f} deg hfov ({cam.mrad_per_px:.2f} mrad/px), "
           f"{args.fps:.0f} fps, blink {args.blink_hz} Hz, "
           f"{'virtual mount, lag %.0f ms' % (1000 * args.mount_latency) if args.virtual_mount else 'no virtual mount'}")
     if args.calibrate > 0:
         print(f"calibrating for {args.calibrate:.0f}s: keep the drone in calm hover with the beacon blinking")
-        src.duration = None
-        src._t0 = None
+        src.restart(None)
         tracker.cal = tracker.calibrate(src, seconds=args.calibrate)
         tracker.cal.save(args.calibration)
         print(f"saved {args.calibration}: boresight ({tracker.cal.boresight_pan:.1f}, "
               f"{tracker.cal.boresight_tilt:.1f}) mrad, i_ref {tracker.cal.i_ref:.1f}")
-        src.duration = args.duration
-        src._t0 = None
+        src.restart(args.duration)
         tracker.state = SEARCH
         tracker.kf.reset()
     elif os.path.exists(args.calibration):
@@ -437,6 +439,12 @@ def main():
     ap.add_argument("--min-amplitude", type=float, default=25.0,
                     help="blink: lock-in grey levels; steady: grey levels the LED must stand above the background")
     ap.add_argument("--max-jump-mrad", type=float, default=150.0)
+    ap.add_argument("--exposure", type=float, default=None,
+                    help="camera source: manual exposure value (DirectShow: 2^value seconds, e.g. -9 = 1/512 s). "
+                         "Omit if exposure is already locked on the camera")
+    ap.add_argument("--tag-size", type=float, default=None,
+                    help="camera source: side of the AprilTag on the drone in metres (e.g. 0.09); enables lean and "
+                         "range. Omit if there is no tag (lean 0, range 3 m)")
     ap.add_argument("--virtual-mount", action=argparse.BooleanOptionalAction, default=True,
                     help="camera source: measure the residual against a software pan-tilt mount that follows the "
                          "drone (what a real gimbal would leave over). --no-virtual-mount charges the drone's whole "

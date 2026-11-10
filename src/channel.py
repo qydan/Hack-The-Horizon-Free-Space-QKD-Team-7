@@ -95,7 +95,7 @@ def simulate_message(budget_params: BudgetParams, decoy_params: DecoyParams, b: 
     """Send ``n_pulses`` pulses through the channel described by ``b``."""
     p = budget_params
     eta_eff = b.eta * p.eta_d
-    dp = replace(decoy_params, mu=p.mu, dark_yield=min(0.5, p.p_dark + b.p_bg))
+    dp = replace(decoy_params, mu=p.mu, dark_yield=min(0.5, p.p_dark))
     e_photon = intercept_resend_error(p.e_opt, eve.intercept_fraction)
 
     raw = simulate(dp, 0.0, e_photon, pns_attack=eve.pns, rng=rng, eta=eta_eff, n_pulses=n_pulses)
@@ -107,7 +107,7 @@ def simulate_message(budget_params: BudgetParams, decoy_params: DecoyParams, b: 
         out.errors[c] = raw[c]["errors"]
         out.expected_detected[c] = raw[c]["sent"] * expected_gain(dp, lam, eta_eff)
     p_sig = 1.0 - np.exp(-p.mu * b.eta * p.eta_d)
-    p_noise = p.p_dark + b.p_bg
+    p_noise = p.p_dark
     n_sig = out.sent["signal"]
     out.exp_clicks = n_sig * (p_sig + p_noise)
     out.exp_err = n_sig * (e_photon * p_sig + 0.5 * p_noise)

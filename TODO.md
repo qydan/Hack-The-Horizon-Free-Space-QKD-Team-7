@@ -12,8 +12,8 @@ telemetry. What remains is mostly hardware validation, calibration and presentat
 
 ## 2. Real rig bring-up (before the event)
 Goal: prove the real-camera path works end to end. Procedure: `docs/hardware_handoff.md`.
-- [ ] Build the beacon (red LED, 7.5 Hz, 100% / 40%, never fully off) or the retroreflector + blinking ring light.
-- [ ] Run `python tools/camera_check.py --fps 30 --blink-hz 7.5` on Windows Python (not WSL) until it reports READY; note fps, `min_amplitude`, blink rate.
+- [ ] Build the beacon: a constantly-lit red LED under a diffuser (the real rig uses `--beacon steady`).
+- [ ] Run `python tools/camera_check.py --fps 30 --steady` on Windows Python (not WSL) until it reports READY; note fps and `min_amplitude`.
 - [ ] Exposure is locked on the Action 5 Pro; confirm intensity is steady at calm hover.
 - [ ] Calibrate in calm hover: `python src/tracker.py --source camera --calibrate 15 --duration 1` (saves `calibration.json`).
 - [ ] Check: lens cover drops the state to `COAST` / `SEARCH` and tracking returns when removed.
@@ -23,11 +23,10 @@ Goal: prove the real-camera path works end to end. Procedure: `docs/hardware_han
 ## 3. Software gaps
 - [x] **Fixed-camera residual.** Done in software: the residual is measured against a virtual `SimGimbal` mount (`--virtual-mount`, default on). Still to decide: present it as a modelled mount, and check `--mount-latency` against the real Action 5 Pro latency if you can measure it.
 - [ ] Wire the real gimbal: a `gimbal.Gimbal` subclass for the driver and a `build_*` function in `tracker.py` (timestamp encoder reads to the frame time).
-- [ ] Pose on the real camera: pass `vision.AprilTagPose` as `pose_fn` in `build_camera` (lean and range are 0 / 3 m today, so the drone-lean error bar is empty).
-- [ ] `tracker.py --source camera`: add `--exposure` (it does not lock exposure itself).
+- [x] Pose on the real camera: `--tag-size` passes `AprilTagPose` to the tracker. Still to do: print a tag and check lean and range on the rig.
+- [x] `tracker.py --source camera --exposure N` locks exposure (skip it if the Action 5 Pro already holds it).
 - [ ] Drone-detection ONNX model for `YoloDnnDetector` (only needed with a gimbal).
-- [ ] Live plots of tracking state, QBER and key rate (the dashboard is post-run only).
-- [ ] Optional: IR data link receiver reader feeding `rx_signal` / `rx_background` (I9).
+- [x] Live plots: `tools/live_dashboard.py run.jsonl` (run the sandbox with `--log`).
 
 ## 4. Calibration targets (on the rig)
 - [ ] Calm hover: QBER about 3%, keys issued.
@@ -41,7 +40,7 @@ Goal: prove the real-camera path works end to end. Procedure: `docs/hardware_han
 - [ ] D1: continuous tracking for 2 minutes under fan turbulence.
 - [ ] D2: full run with the live camera showing sift, error correction, privacy amplification, QBER < 11%.
 - [ ] D3: review `docs/d3_engineering_design.md` mass/power budget against real COTS part specs (<5 kg payload).
-- [ ] Optional threat model: decide whether to build the physical second IR channel (currently software decoy states only).
+- [ ] Optional threat model: software decoy states only (no second optical channel in the demo).
 
 ## 6. Presentation prep
 - [ ] Decide wording for the claims: "keys below about 5% QBER per 1 s block, abort gate at 11%" (not "keys up to 11%").

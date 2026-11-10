@@ -31,7 +31,7 @@ a given `--snr` and `--fov`.
 * **Measured fps, dropped frames:** `__ fps`, `__ %`
 * **Blink rate:** `__ Hz`
 * **Noise floor / beacon amplitude / SNR:** `__` / `__` / `__`
-* **Settings used:** `--fps __ --blink-hz __ --min-amplitude __ --proc-width __ --zone __`
+* **Settings used:** `--fps __ --beacon steady --min-amplitude __ --proc-width __ --zone __`
 * **Notes:**
 
 ### [Template] Date: YYYY-MM-DD | Calm-hover calibration

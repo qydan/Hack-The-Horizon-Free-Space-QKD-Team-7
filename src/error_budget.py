@@ -12,12 +12,8 @@
               eta_tx (about 1 inside +-5 deg, falling at the edge)
 * I / I_cal   beacon brightness against the preflight calibration
 
-With the IR data link built, the measured photodiode signal S / S_cal already contains every
-pointing loss, so it *replaces* the two pointing factors; the measured background replaces
-the modelled one.
-
 QBER = (e_opt p_sig + p_noise / 2) / (p_sig + p_noise)
-p_sig = 1 - exp(-mu eta eta_d),  p_noise = p_dark + p_bg
+p_sig = 1 - exp(-mu eta eta_d),  p_noise = p_dark
 """
 import math
 from dataclasses import dataclass
@@ -47,7 +43,6 @@ class BudgetParams:
     eta_d: float = 0.6                      # detector efficiency
     e_opt: float = 0.02                     # optical error (misalignment, imperfect polarisation)
     p_dark: float = 1.0e-5                  # dark-count probability per pulse (placeholder: default_params() calibrates it)
-    p_bg_cal: float = 1.0e-5                # background probability at B / B_cal = 1 (IR link only)
     # the range the preflight calibration was done at (the demo range)
     cal_range_m: float = 3.0
 
@@ -57,7 +52,6 @@ class BudgetParams:
         eta = geometric_loss(self, self.cal_range_m)
         p_sig = 1.0 - math.exp(-self.mu * eta * self.eta_d)
         self.p_dark = p_sig / on_axis_snr
-        self.p_bg_cal = self.p_dark
         return self.p_dark
 
 
@@ -90,7 +84,6 @@ class Budget:
     f_rx: float
     f_tx: float
     brightness: float
-    p_bg: float             # background click probability per pulse (0 in modelled mode)
     locked: bool
 
     @property
@@ -102,25 +95,19 @@ def transmittance(p: BudgetParams, m: TelemetryMessage) -> Budget:
     """Turn one telemetry message into a transmittance and background level."""
     geo = geometric_loss(p, m.range_m)
     if not m.locked:                      # beacon lost: nothing reaches the receiver
-        return Budget(0.0, geo, 0.0, 0.0, 0.0, 0.0, False)
-
-    if m.rx_signal is not None:
-        # Measured on the photodiode: S already contains every pointing loss.
-        s = max(0.0, m.rx_signal)
-        bg = p.p_bg_cal * max(0.0, m.rx_background or 0.0)
-        return Budget(geo * s, geo, 1.0, 1.0, s, bg, True)
+        return Budget(0.0, geo, 0.0, 0.0, 0.0, False)
 
     f_rx = rx_pointing_factor(p, m.residual_mrad)
     f_tx = tx_pointing_factor(p, tx_pointing_angle_mrad(m.lean_deg, m.drift_mrad))
     bright = max(0.0, min(m.intensity, 1.0))
-    return Budget(geo * f_rx * f_tx * bright, geo, f_rx, f_tx, bright, 0.0, True)
+    return Budget(geo * f_rx * f_tx * bright, geo, f_rx, f_tx, bright, True)
 
 
 def qber_estimate(p: BudgetParams, b: Budget, eve_fraction: float = 0.0) -> float:
     """Expected sifted QBER for a transmittance (the formula above). Intercept-resend on a
     fraction ``eve_fraction`` of pulses adds 25% error on those pulses' photons."""
     p_sig = 1.0 - math.exp(-p.mu * b.eta * p.eta_d)
-    p_noise = p.p_dark + b.p_bg
+    p_noise = p.p_dark
     e = p.e_opt
     if eve_fraction > 0.0:
         q = 0.25 * min(1.0, eve_fraction)
@@ -131,11 +118,11 @@ def qber_estimate(p: BudgetParams, b: Budget, eve_fraction: float = 0.0) -> floa
 def pointing_loss_to_gate_db(p: BudgetParams, b_on_axis: Optional[Budget] = None) -> float:
     """How many dB of extra loss take the on-axis QBER up to the 11% gate."""
     on = b_on_axis or Budget(geometric_loss(p, p.cal_range_m), geometric_loss(p, p.cal_range_m),
-                             1.0, 1.0, 1.0, 0.0, True)
+                             1.0, 1.0, 1.0, True)
     lo, hi = 0.0, 80.0
     for _ in range(60):
         mid = (lo + hi) / 2
-        t = Budget(on.eta * 10 ** (-mid / 10), on.eta_geo, 1, 1, 1, on.p_bg, True)
+        t = Budget(on.eta * 10 ** (-mid / 10), on.eta_geo, 1, 1, 1, True)
         if qber_estimate(p, t) < QBER_GATE:
             lo = mid
         else:

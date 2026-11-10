@@ -81,3 +81,20 @@ def test_two_programs_over_zeromq():
     assert tr.returncode == 0 and "first lock after" in tr.stdout, tr.stderr
     assert sb.returncode == 0, err
     assert "DONE" in out and "key" in out
+
+
+@pytest.mark.slow
+def test_live_dashboard_follows_a_partial_log_and_hides_keys(tmp_path):
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import live_dashboard
+    import make_dashboard
+    log = tmp_path / "run.jsonl"
+    r = run("--source", "csv", "--quiet", "--log", str(log))
+    assert r.returncode == 0, r.stderr
+    lines = log.read_text().splitlines()
+    log.write_text("\n".join(lines) + "\n" + lines[-1][:20])        # a half-written last line
+    rows = live_dashboard.read_log(str(log))
+    assert len(rows) == len(lines) and all("key" not in x for x in rows)
+    body = make_dashboard.body_html(rows, window_s=20.0, suffix=" (live)")
+    assert body and "(live)" in body and "Gate decision per key block" in body
+    assert make_dashboard.body_html([]) is None

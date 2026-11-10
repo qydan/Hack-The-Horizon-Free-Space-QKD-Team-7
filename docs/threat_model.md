@@ -57,10 +57,9 @@ QBER; use a longer `--block` or `--pool`).
 
 ## 4. Second IR channel (cross-check)
 A second wavelength and receiver on the same path gives an independent measurement of alignment
-and loss. If the two channels disagree, the main beam is being tapped or blocked. The telemetry
-schema carries the optional IR data link measurements (`rx_signal`, `rx_background`, interface
-I9) and the error budget uses them when present, but the link hardware and a cross-check between
-the two channels are **not implemented**.
+and loss. If the two channels disagree, the main beam is being tapped or blocked. This is a
+design for the deployed system only: the demo has no infrared hardware and the cross-check is
+**not implemented**.
 
 ## Out of scope / not modelled
 | Attack | Notes |

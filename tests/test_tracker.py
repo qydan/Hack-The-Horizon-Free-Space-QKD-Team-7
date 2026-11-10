@@ -185,6 +185,21 @@ def test_steady_beacon_in_a_dark_scene_is_acquired_and_followed(fps):
     assert np.mean([m.intensity for m in late]) > 0.0
 
 
+def test_steady_beacon_with_the_virtual_mount_matches_the_rig_setup():
+    """The real rig: 30 fps, constantly-lit LED, virtual mount. Residual stays small while drift is measured."""
+    from tracker import TrackerConfig
+    cam = CameraModel(480, 270, 70.0)
+    rig = SimRig(cam, _Still(), phases=[Phase(0, 1e9, 20, 0.4, 0.5)], duration=20.0, fps=30, appear_at=2.0,
+                 start_offset=(0.0, 0.0), seed=3, steady_beacon=True)
+    cfg = TrackerConfig(fps=30, fixed_camera=True, steady_beacon=True, min_amplitude=40.0, acquire_frames=3,
+                        coast_frames=18, virtual_mount=True)
+    tr = GroundTracker(cam, rig.gimbal, config=cfg)
+    msgs = [m for m in tr.run(rig) if m.t > 8.0 and m.state == FINE_TRACK]
+    assert len(msgs) > 200
+    assert np.mean([m.residual_mrad for m in msgs]) < 3.0
+    assert np.mean([m.drift_mrad for m in msgs]) > 3.0
+
+
 def test_steady_beacon_does_not_lock_before_the_drone_appears():
     tr, rig, msgs = _steady_run(distractors=False)
     assert all(m.state == SEARCH for m in msgs if m.t < 2.0)

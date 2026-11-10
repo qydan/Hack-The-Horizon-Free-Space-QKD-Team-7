@@ -117,4 +117,3 @@ aperture, larger receivers), and regulatory approval for laser operation near ai
 | Error budget (telemetry to transmittance to QBER) | Measured QBER vs telemetry (phase 1-2) |
 | Emulated photons in software | Real polarization-encoded photons on SPADs |
 | Decoy-state / intercept-resend / PNS models | Same protocol logic, running on real counts |
-| Optional IR LED data link (`rx_signal`, `rx_background`) | Classical channel for sifting and error correction |

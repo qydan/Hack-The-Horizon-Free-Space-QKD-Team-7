@@ -9,10 +9,10 @@ bring-up procedure.
 | Component | Purpose | Notes |
 | :--- | :--- | :--- |
 | **Drone** | Holds station in the fan stream; its motion is the disturbance. | DJI Mini 2 SE, flown by hand and parked in a hover. No SDK or drone telemetry is used. A beacon takes it over 250 g: check the event rules. |
-| **Beacon, option A** | One bright blinking point for the ground camera to lock onto. | 2-3 red LEDs under a ping-pong ball diffuser, driven by a small microcontroller (Seeed XIAO RP2040) from its own LiPo. Blinks 100% / 40% at 7.5 Hz (4 camera frames per blink at 30 fps), never fully off. No radio. |
-| **Beacon, option B** | Same, with nothing powered on the drone. | Retroreflective tape or a retroreflective AprilTag (6-8 cm, about 3 g), lit by a ring light around the camera lens blinking at 7.5 Hz. |
+| **Beacon, option A** | One bright point for the ground camera to lock onto. | **Used on the rig:** a red LED, constantly on (`--beacon steady`), under a ping-pong ball diffuser, on its own battery. No radio, no microcontroller. |
+| **Beacon, option B** | Same, with nothing powered on the drone. | Retroreflective tape or a retroreflective AprilTag (6-8 cm, about 3 g), lit by a steady ring light around the camera lens. |
 | **AprilTag** (optional) | Drone lean and range from the ground. | 36h11, 8-10 cm (`vision.AprilTagPose`). Not used in fixed-camera mode yet. |
-| **Ground camera** | Captures the beacon. | **DJI Osmo Action 5 Pro in webcam mode** (USB, 1080p at 30 fps, exposure and white balance locked), so the beacon is red and blinks at 7.5 Hz. Upgrade path: Arducam B0332 (OV9281, mono, global shutter, about 120 fps; no-IR-cut lens + 850 nm bandpass for an IR beacon), which allows a 13 Hz blink and a faster lock. |
+| **Ground camera** | Captures the beacon. | **DJI Osmo Action 5 Pro in webcam mode** (USB, 1080p at 30 fps, exposure and white balance locked), with a steady red beacon. Upgrade path: Arducam B0332 (OV9281, mono, global shutter, about 120 fps), which would allow a blinking beacon and lock-in detection. |
 | **Gimbal** (optional) | Points the camera and reports its angles. | Pan-tilt gimbal; needs a `gimbal.Gimbal` driver wrapper. Without it the camera is mounted still (`FixedGimbal`). |
 | **Turbulence generator** | Pushes the drone to create drift, jitter and lean. | Desk fan with several speeds. |
 | **Ground station PC** | Runs the tracker and the cyber sandbox. | Python 3 with `requirements.txt` (NumPy, pyzmq, opencv-contrib-python). |
@@ -22,7 +22,7 @@ bring-up procedure.
 ### Distance & Lighting
 1. Position the camera about **3 m** from the drone (the calibration range the error budget assumes).
 2. Vision positioning on the Mini 2 SE needs a patterned floor, more than 15 lux and 0.5-10 m height; over a plain floor it drifts more.
-3. A blinking beacon tolerates room lights (lock-in detection ignores anything not pulsing at the blink rate). A constantly-lit LED (`--beacon steady`) needs a dark scene.
+3. The beacon does not blink, so the tracker finds it as the brightest small spot in view: dim the room, keep lamps, screens and windows out of the picture (or outside `--zone`), and avoid other small bright spots. Keep the light above 15 lux for the drone's vision positioning (dim, not dark). A blinking beacon would tolerate room lights; this one does not.
 
 ### Camera
 1. Hard-mount the camera on a desk or heavy tripod. In fixed-camera mode **it must not move** after calibration.
