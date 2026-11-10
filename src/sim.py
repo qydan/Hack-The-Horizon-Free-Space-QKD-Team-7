@@ -102,8 +102,7 @@ class SimRig:
 
     def _to_px(self, world_mrad):
         pan, tilt = self.gimbal.angles()
-        k = self.cam.mrad_per_px
-        return (self.cam.width / 2 + (world_mrad[0] - pan) / k, self.cam.height / 2 + (world_mrad[1] - tilt) / k)
+        return self.cam.mrad_to_px(world_mrad[0] - pan, world_mrad[1] - tilt)
 
     def read(self) -> Optional[Tuple[np.ndarray, float]]:
         t = self._i / self.fps

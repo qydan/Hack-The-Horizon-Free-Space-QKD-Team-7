@@ -185,9 +185,7 @@ class GroundTracker:
         else:
             # predict where the drone is and look for the beacon in a small window around it
             pred = np.array(self.kf.predict(dt))
-            k = self.cam.mrad_per_px
-            px = self.cam.width / 2 + (pred[0] - enc[0]) / k
-            py = self.cam.height / 2 + (pred[1] - enc[1]) / k
+            px, py = self.cam.mrad_to_px(pred[0] - enc[0], pred[1] - enc[1])
             r = cfg.roi_half_px
             beacon = self._find(frame, (int(px - r), int(py - r), int(px + r), int(py + r)))
             if beacon is not None:

@@ -154,5 +154,16 @@ class TestSearchDetectors:
 
     def test_camera_model(self):
         c = CameraModel(1280, 720, 70.0)
-        assert c.mrad_per_px == pytest.approx(0.95, abs=0.01)     # design doc: ~0.1 px -> ~0.1 mrad
+        assert c.mrad_per_px == pytest.approx(1.094, abs=0.005)   # 1 / focal_px at the centre
         assert c.px_to_mrad(640, 360) == (0, 0)
+
+    def test_camera_model_wide_lens_is_pinhole(self):
+        c = CameraModel(1920, 1080, 104.0)
+        # the centre scale is 1/f, not hfov/width (which would be ~30% smaller at 104 deg)
+        assert c.mrad_per_px == pytest.approx(1000.0 / c.focal_px)
+        assert c.mrad_per_px > math.radians(104.0) * 1000.0 / 1920 * 1.3
+        # the frame edge is hfov/2 off axis
+        assert c.px_to_mrad(1920, 540)[0] == pytest.approx(math.radians(52.0) * 1000.0, rel=1e-6)
+        # round trip
+        x, y = c.mrad_to_px(*c.px_to_mrad(123.4, 777.7))
+        assert (x, y) == pytest.approx((123.4, 777.7))

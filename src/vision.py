@@ -32,7 +32,9 @@ class CameraModel:
 
     @property
     def mrad_per_px(self) -> float:
-        return math.radians(self.hfov_deg) * 1000.0 / self.width
+        """Angle per pixel at the image centre (pinhole model: 1 / focal length in px).
+        Off-centre pixels subtend less; px_to_mrad / mrad_to_px handle that exactly."""
+        return 1000.0 / self.focal_px
 
     @property
     def focal_px(self) -> float:
@@ -45,8 +47,15 @@ class CameraModel:
 
     def px_to_mrad(self, x: float, y: float) -> Tuple[float, float]:
         """Offset of pixel (x, y) from the image centre, in mrad (pan right +, tilt down +)."""
-        k = self.mrad_per_px
-        return (x - self.width / 2.0) * k, (y - self.height / 2.0) * k
+        f = self.focal_px
+        return (math.atan((x - self.width / 2.0) / f) * 1000.0,
+                math.atan((y - self.height / 2.0) / f) * 1000.0)
+
+    def mrad_to_px(self, pan: float, tilt: float) -> Tuple[float, float]:
+        """Inverse of px_to_mrad: pixel position of an angular offset from the image centre."""
+        f = self.focal_px
+        return (self.width / 2.0 + f * math.tan(pan / 1000.0),
+                self.height / 2.0 + f * math.tan(tilt / 1000.0))
 
 
 # --------------------------------------------------------------------------- lock-in
