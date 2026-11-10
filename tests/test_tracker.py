@@ -25,6 +25,7 @@ def calm_run():
     return tr, rig, list(tr.run(rig))
 
 
+@pytest.mark.slow
 def test_acquires_the_drone_quickly_after_it_appears(calm_run):
     tr, _, msgs = calm_run
     assert tr.acquisition_time is not None and tr.acquisition_time < 60      # D1
@@ -52,6 +53,7 @@ def test_drift_is_measured_from_the_ground_only(calm_run):
     assert 0.2 < np.mean([m.drift_mrad for m in msgs if m.t > 6]) < 12
 
 
+@pytest.mark.slow
 def test_measured_motion_grows_with_wind():
     phases = [Phase(0, 15, 3, 0.3, 0.5), Phase(15, 1e9, 25, 3.0, 3.5)]
     tr, rig = make(phases, 30.0)
@@ -64,6 +66,7 @@ def test_measured_motion_grows_with_wind():
     assert np.mean([m.lean_deg for m in windy]) > np.mean([m.lean_deg for m in calm]) + 1.5
 
 
+@pytest.mark.slow
 def test_survives_a_short_beacon_dropout_by_coasting():
     phases = [Phase(0, 8, 3, 0.3, 0.5), Phase(8, 8.15, 3, 0.3, 0.5, brightness=0.0), Phase(8.15, 1e9, 3, 0.3, 0.5)]
     tr, rig = make(phases, 12.0)
@@ -72,6 +75,7 @@ def test_survives_a_short_beacon_dropout_by_coasting():
     assert all(m.state == FINE_TRACK for m in msgs if m.t > 10)
 
 
+@pytest.mark.slow
 def test_long_loss_returns_to_search_then_reacquires():
     phases = [Phase(0, 8, 3, 0.3, 0.5), Phase(8, 10, 3, 0.3, 0.5, brightness=0.0), Phase(10, 1e9, 3, 0.3, 0.5)]
     tr, rig = make(phases, 16.0)
@@ -81,6 +85,7 @@ def test_long_loss_returns_to_search_then_reacquires():
     assert all(m.state == FINE_TRACK for m in msgs if m.t > 14)
 
 
+@pytest.mark.slow
 def test_reacquire_command_drops_the_lock_and_finds_it_again():
     tr, rig = make([Phase(0, 1e9, 3, 0.3, 0.5)], 12.0)
     out = []
@@ -125,12 +130,12 @@ class _Still(SimGimbal):
         pass
 
 
-def _fixed_run(fps, blink_hz, phases, duration):
+def _fixed_run(fps, blink_hz, phases, duration, virtual_mount=False):
     from tracker import TrackerConfig
     cam = CameraModel(480, 270, 70.0)
     s = fps / 120.0
     cfg = TrackerConfig(fps=fps, blink_hz=blink_hz, fixed_camera=True, acquire_frames=max(3, round(6 * s)),
-                        coast_frames=max(12, round(72 * s)))
+                        coast_frames=max(12, round(72 * s)), virtual_mount=virtual_mount)
     rig = SimRig(cam, _Still(), phases=phases, duration=duration, fps=fps, blink_hz=blink_hz,
                  appear_at=2.0, start_offset=(0.0, 0.0), seed=3)
     tr = GroundTracker(cam, rig.gimbal, config=cfg)
@@ -144,6 +149,16 @@ def test_fixed_camera_acquires_and_holds_lock(fps, blink):
     assert tr.acquisition_time is not None and tr.acquisition_time < 6.0, tr.acquisition_time
     late = [m for m in msgs if m.t > 8.0]
     assert sum(m.state == FINE_TRACK for m in late) > 0.9 * len(late)
+
+
+def test_virtual_mount_leaves_only_the_fast_motion_as_residual():
+    phases = [Phase(0, 1e9, 20, 0.4, 0.5)]
+    _, bare = _fixed_run(30, 7.5, phases, 20.0)
+    tr, mounted = _fixed_run(30, 7.5, phases, 20.0, virtual_mount=True)
+    mean = lambda ms: np.mean([m.residual_mrad for m in ms if m.t > 8.0 and m.state == FINE_TRACK])
+    assert mean(mounted) < 0.6 * mean(bare)         # the mount follows the slow wander away
+    assert mean(mounted) > 0.2                      # but its lag and steps leave a real residual
+    assert mounted[-1].drift_mrad == pytest.approx(bare[-1].drift_mrad, abs=2.0)   # drift is measured the same way
 
 
 # ---------------------------------------------------------------- steady (non-blinking) beacon

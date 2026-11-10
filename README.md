@@ -2,7 +2,7 @@
 
 The demo proves one thing: **the quality of the quantum key rises and falls with how well the ground station tracks a real, wind-blown drone.**
 
-A ground camera finds a drone hovering in front of a fan, locks onto its blinking beacon and measures how much it moves. That measured motion becomes photon loss in a software BB84 channel, which decides whether the key is safe to keep. The source of truth for the design is `Drone QKD demo system diagram explained.docx`; `docs/system_architecture.md` maps it onto the code.
+A ground camera finds a drone hovering in front of a fan, locks onto its blinking beacon and measures how much it moves. That measured motion becomes photon loss in a software BB84 channel, which decides whether the key is safe to keep. The code and `docs/system_architecture.md` describe the system as built; `original_design.docx` is the early design brief and is out of date in places (camera, gimbal, operating point).
 
 ```
 drone + beacon --light--> camera + gimbal + tracker --telemetry--> error budget -> channel + decoys
@@ -67,13 +67,13 @@ Useful options: `--block` (seconds per key block), `--pulse-rate`, `--snr` (on-a
 Fixed camera, no gimbal (run on Windows Python, not WSL). Full procedure: `docs/hardware_handoff.md`.
 
 ```bash
-python tools/camera_check.py --device 0 --fps 60                             # is the camera good enough? prints the settings to use
-python src/tracker.py --source camera --fps 60 --calibrate 15 --duration 1   # calm hover: saves calibration.json
+python tools/camera_check.py --device 0 --fps 30 --blink-hz 7.5                           # is the camera good enough? prints the settings to use
+python src/tracker.py --source camera --fps 30 --blink-hz 7.5 --calibrate 15 --duration 1   # calm hover: saves calibration.json
 python src/demo_runner.py --source zmq --log run.jsonl --record demo.csv     # sandbox first
-python src/tracker.py --source camera --fps 60                               # then the tracker (120 s)
+python src/tracker.py --source camera --fps 30 --blink-hz 7.5                 # then the tracker (120 s)
 ```
 
-`--beacon steady` tracks a constantly-lit LED (needs a dark scene), `--zone x0,y0,x1,y1` restricts where the beacon is looked for, and `--blink-hz` must match the beacon (13 Hz needs about 60 fps or more; use about 7 Hz at 30 fps). There is no AprilTag pose in this mode yet, so `lean_deg` is 0 and `range_m` is the nominal 3 m.
+`--beacon steady` tracks a constantly-lit LED (needs a dark scene), `--zone x0,y0,x1,y1` restricts where the beacon is looked for, and `--blink-hz` must match the beacon (the Action 5 Pro rig runs 30 fps with a 7.5 Hz red LED; 13 Hz needs about 60 fps or more). The residual is measured against a software pan-tilt mount that follows the drone (`--virtual-mount`, on by default, `--mount-latency` 0.06 s; `--no-virtual-mount` gives the raw image-centre offset). There is no AprilTag pose in this mode yet, so `lean_deg` is 0 and `range_m` is the nominal 3 m.
 
 ## Telemetry
 
@@ -103,10 +103,11 @@ The design says to choose `mu`, `eta_d` and `p_dark` so the on-axis signal is "a
 ## Tests
 
 ```bash
-pytest tests/ -v
+pytest tests/ -v              # full suite (about 4 minutes)
+pytest tests/ -m "not slow"   # quick run, skips the 10 slowest tests
 ```
 
-No camera or hardware is used; the engine runs in seeded test mode (`tests/conftest.py`). The full suite takes several minutes (the tracker tests render simulated camera frames).
+No camera or hardware is used; the engine runs in seeded test mode (`tests/conftest.py`). The full suite takes a few minutes (subprocess runs and simulated camera frames); the `slow` marker covers the tests that take more than about 5 s.
 
 ## Docs
 

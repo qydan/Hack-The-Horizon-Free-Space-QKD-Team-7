@@ -1,7 +1,7 @@
 # Hardware Bill of Materials (BOM) & Physical Setup Guide
 
-The physical hardware-in-the-loop rig that drives the ground tracker. Choices follow the design
-document (`Drone QKD demo system diagram explained.docx`); see `docs/hardware_handoff.md` for the
+The physical hardware-in-the-loop rig that drives the ground tracker. Choices started from the
+early design brief (`original_design.docx`, partly out of date); see `docs/hardware_handoff.md` for the
 bring-up procedure.
 
 ## 1. Bill of Materials
@@ -9,10 +9,10 @@ bring-up procedure.
 | Component | Purpose | Notes |
 | :--- | :--- | :--- |
 | **Drone** | Holds station in the fan stream; its motion is the disturbance. | DJI Mini 2 SE, flown by hand and parked in a hover. No SDK or drone telemetry is used. A beacon takes it over 250 g: check the event rules. |
-| **Beacon, option A** | One bright blinking point for the ground camera to lock onto. | 2-3 LEDs (IR 850 nm or red) under a ping-pong ball diffuser, driven by a small microcontroller (Seeed XIAO RP2040) from its own LiPo. Blinks 100% / 40% at 13 Hz, never fully off. No radio. |
-| **Beacon, option B** | Same, with nothing powered on the drone. | Retroreflective tape or a retroreflective AprilTag (6-8 cm, about 3 g), lit by a ring light around the camera lens blinking at 13 Hz. |
+| **Beacon, option A** | One bright blinking point for the ground camera to lock onto. | 2-3 red LEDs under a ping-pong ball diffuser, driven by a small microcontroller (Seeed XIAO RP2040) from its own LiPo. Blinks 100% / 40% at 7.5 Hz (4 camera frames per blink at 30 fps), never fully off. No radio. |
+| **Beacon, option B** | Same, with nothing powered on the drone. | Retroreflective tape or a retroreflective AprilTag (6-8 cm, about 3 g), lit by a ring light around the camera lens blinking at 7.5 Hz. |
 | **AprilTag** (optional) | Drone lean and range from the ground. | 36h11, 8-10 cm (`vision.AprilTagPose`). Not used in fixed-camera mode yet. |
-| **Ground camera** | Captures the beacon. | Best: Arducam B0332 (OV9281, mono, global shutter, about 120 fps; no-IR-cut lens + 850 nm bandpass for an IR beacon). Alternatives: DJI Osmo Action 5 Pro in webcam mode or a USB webcam (red beacon or retro only, usually 30 fps: slow the blink to about 7 Hz). |
+| **Ground camera** | Captures the beacon. | **DJI Osmo Action 5 Pro in webcam mode** (USB, 1080p at 30 fps, exposure and white balance locked), so the beacon is red and blinks at 7.5 Hz. Upgrade path: Arducam B0332 (OV9281, mono, global shutter, about 120 fps; no-IR-cut lens + 850 nm bandpass for an IR beacon), which allows a 13 Hz blink and a faster lock. |
 | **Gimbal** (optional) | Points the camera and reports its angles. | Pan-tilt gimbal; needs a `gimbal.Gimbal` driver wrapper. Without it the camera is mounted still (`FixedGimbal`). |
 | **Turbulence generator** | Pushes the drone to create drift, jitter and lean. | Desk fan with several speeds. |
 | **Ground station PC** | Runs the tracker and the cyber sandbox. | Python 3 with `requirements.txt` (NumPy, pyzmq, opencv-contrib-python). |

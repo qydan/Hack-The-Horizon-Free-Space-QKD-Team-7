@@ -8,7 +8,7 @@
 - [ ] Camera checked and calibrated in calm hover (`docs/hardware_handoff.md`, steps 1-2); `calibration.json` is present.
 - [ ] Two terminals ready, sandbox first:
   `python src/demo_runner.py --source zmq --log run.jsonl --record demo.csv --keys-out keys.jsonl`
-  then `python src/tracker.py --source camera --fps 60 --duration 120`.
+  then `python src/tracker.py --source camera --fps 30 --blink-hz 7.5 --duration 120`.
 - [ ] Fallback ready: `python src/demo_runner.py --source csv --csv demo.csv` (a recorded run) or `python src/demo_runner.py` (simulated rig).
 
 ## The Pitch Script

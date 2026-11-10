@@ -34,7 +34,7 @@ from typing import Callable, Deque, Iterator, List, Optional, Tuple
 
 import numpy as np
 
-from gimbal import Gimbal
+from gimbal import Gimbal, SimGimbal
 from telemetry import (COAST, FINE_TRACK, SEARCH, TELEMETRY_ENDPOINT, ControlSubscriber, TelemetryMessage,
                        ZmqPublisher)
 from vision import (Beacon, BrightBlobDetector, CameraModel, KalmanCV, LockInDetector, Pose,
@@ -77,6 +77,9 @@ class TrackerConfig:
     scan_rate_mrad_s: float = 300.0    # pan sweep while nothing is found
     scan_range_mrad: float = 500.0
     fixed_camera: bool = False         # no gimbal: acquire the beacon anywhere in view, never steer or scan
+    virtual_mount: bool = False        # fixed camera only: a software pan-tilt mount follows the drone and the residual
+                                       # is measured against it (what a real gimbal would leave over)
+    mount_latency_s: float = 0.06      # virtual mount lag: ~30 ms servo loop + frame interval and exposure at 30 fps
     steady_beacon: bool = False        # beacon does not blink: find it as a bright spot (min_amplitude = contrast)
     spot_max_area: int = 600           # steady mode: largest core (px) still counted as the LED
     search_zone: Optional[Tuple[float, float, float, float]] = None   # (x0, y0, x1, y1) as 0-1 fractions of the frame:
@@ -97,6 +100,8 @@ class GroundTracker:
                                      self.cfg.min_amplitude)
         self.spot = SteadySpotDetector(self.cfg.min_amplitude, max_area=self.cfg.spot_max_area)
         self.kf = KalmanCV()
+        self.vmount: Optional[SimGimbal] = (SimGimbal(latency_s=self.cfg.mount_latency_s)
+                                            if self.cfg.virtual_mount and self.cfg.fixed_camera else None)
 
         self.state = SEARCH
         self._hits = 0
@@ -161,9 +166,15 @@ class GroundTracker:
 
         if not cfg.steady_beacon:
             self.lockin.push(frame, t)
-        enc = np.array(self.gimbal.angles(), dtype=float)
+        enc = np.array(self.gimbal.angles(), dtype=float)       # camera pointing (0 for a fixed camera)
         cmd = np.array(self.gimbal.commanded, dtype=float)
-        lag = float(np.hypot(*(cmd - enc)))
+        if self.vmount is not None:
+            self.vmount.step_time(dt)
+            mount = np.array(self.vmount.angles(), dtype=float)   # where the virtual receiver points
+            lag = float(np.hypot(*(np.array(self.vmount.commanded) - mount)))
+        else:
+            mount = enc
+            lag = float(np.hypot(*(cmd - enc)))
 
         beacon: Optional[Beacon] = None
         resid = 0.0
@@ -191,7 +202,7 @@ class GroundTracker:
                     beacon = None
             if beacon is not None:
                 measured_dir = d_new
-                resid = float(np.hypot(*off))
+                resid = float(np.hypot(*(measured_dir - mount)))
                 self.kf.update(*measured_dir)
                 self.state, self._misses = FINE_TRACK, 0
             else:
@@ -206,6 +217,8 @@ class GroundTracker:
                 vx, vy = self.kf.velocity
                 tx, ty = self.kf.position
                 self.gimbal.command(tx + vx * cfg.lead_s, ty + vy * cfg.lead_s)
+                if self.vmount is not None:
+                    self.vmount.command(tx + vx * cfg.lead_s, ty + vy * cfg.lead_s)
 
         # ---- measurements
         if self.state != SEARCH:
@@ -237,7 +250,10 @@ class GroundTracker:
             fine = refine_centroid(frame, beacon.x, beacon.y) or (beacon.x, beacon.y)
             self._hits += 1
             if self._hits >= cfg.acquire_frames:
-                self.kf.init(*(enc + np.array(self.cam.px_to_mrad(*fine))))
+                first = enc + np.array(self.cam.px_to_mrad(*fine))
+                self.kf.init(*first)
+                if self.vmount is not None:
+                    self.vmount.place(*first)           # the virtual mount starts on the drone
                 self.state, self._misses = FINE_TRACK, 0
                 self.acquisition_times.append(t - self._search_started)
                 self._lp, self._hp = None, deque()
@@ -367,14 +383,16 @@ def build_camera(args):
     # the frame-count settings are tuned for 120 fps; rescale them to the real frame rate
     s = args.fps / 120.0
     cfg = TrackerConfig(fps=args.fps, blink_hz=args.blink_hz, min_amplitude=args.min_amplitude,
-                        fixed_camera=True, acquire_frames=max(3, round(6 * s)),
+                        fixed_camera=True, virtual_mount=args.virtual_mount, mount_latency_s=args.mount_latency,
+                        acquire_frames=max(3, round(6 * s)),
                         coast_frames=max(12, round(72 * s)), roi_half_px=max(20, round(40 * w / 480)),
                         max_jump_mrad=args.max_jump_mrad, steady_beacon=args.beacon == "steady",
                         spot_max_area=max(50, round(600 * (w / 960) ** 2)),
                         search_zone=tuple(float(v) for v in args.zone.split(",")) if args.zone else None)
     tracker = GroundTracker(cam, FixedGimbal(), config=cfg)
     print(f"camera {w}x{h} at {args.hfov:.0f} deg hfov ({cam.mrad_per_px:.2f} mrad/px), "
-          f"{args.fps:.0f} fps, blink {args.blink_hz} Hz")
+          f"{args.fps:.0f} fps, blink {args.blink_hz} Hz, "
+          f"{'virtual mount, lag %.0f ms' % (1000 * args.mount_latency) if args.virtual_mount else 'no virtual mount'}")
     if args.calibrate > 0:
         print(f"calibrating for {args.calibrate:.0f}s: keep the drone in calm hover with the beacon blinking")
         src.duration = None
@@ -419,6 +437,12 @@ def main():
     ap.add_argument("--min-amplitude", type=float, default=25.0,
                     help="blink: lock-in grey levels; steady: grey levels the LED must stand above the background")
     ap.add_argument("--max-jump-mrad", type=float, default=150.0)
+    ap.add_argument("--virtual-mount", action=argparse.BooleanOptionalAction, default=True,
+                    help="camera source: measure the residual against a software pan-tilt mount that follows the "
+                         "drone (what a real gimbal would leave over). --no-virtual-mount charges the drone's whole "
+                         "wander as pointing error")
+    ap.add_argument("--mount-latency", type=float, default=0.06,
+                    help="virtual mount lag in seconds (servo loop plus frame interval and exposure)")
     ap.add_argument("--calibration", default="calibration.json")
     ap.add_argument("--calibrate", type=float, default=0.0, help="seconds of calm hover to calibrate on (camera)")
     ap.add_argument("--wait", type=float, default=1.0, help="seconds to wait for subscribers to connect")

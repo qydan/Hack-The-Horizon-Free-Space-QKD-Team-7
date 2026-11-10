@@ -1,7 +1,6 @@
 # System architecture
 
-Source of truth: *Drone QKD demo: system diagram explained* (`Drone QKD demo system diagram explained.docx`).
-This file records how the code implements it.
+This file describes the system as built. The early design brief, `original_design.docx`, is out of date in places (camera, gimbal, operating point).
 
 The demo proves one thing: **the quality of the quantum key rises and falls with how well the ground station tracks a real, wind-blown drone.** Information flows one way through three segments:
 
@@ -39,15 +38,18 @@ Beacon: 100% / 40% blink at 13 Hz (never fully off), IR 850 nm or red, or retror
 
 The drone's direction is the gimbal encoder angle plus where the spot sits in the image. Calibration (`GroundTracker.calibrate`, `tracker.Calibration`) records the calm-hover boresight and the full-signal beacon brightness.
 
-Frame rate and blink rate go together: 13 Hz assumes about 120 fps; at 30 fps use about 7 Hz (`TrackerConfig.blink_hz`, `fps`).
+Frame rate and blink rate go together: the defaults (13 Hz, 120 fps) are for the simulated rig. The real rig is a DJI Osmo Action 5 Pro at 30 fps with a red LED blinking at 7.5 Hz (`--fps 30 --blink-hz 7.5`).
 
 ### Real camera, fixed mount (`tracker.py --source camera`)
 
-This is what runs on hardware today. The camera does not move (`FixedGimbal`), so the drone's direction is the spot's offset from the image centre, and the residual is that same offset.
+This is what runs on hardware today. The camera does not move (`FixedGimbal`), so the drone's direction is the spot's offset from the image centre. Drift and jitter come straight from that direction.
+
+The residual (receiver pointing error) is measured against a **virtual mount**: a `SimGimbal` (`TrackerConfig.virtual_mount`, on by default for the camera) that the tracker steers from its Kalman prediction exactly as it would a real gimbal, with `mount_latency_s` = 60 ms (servo loop plus the frame interval and exposure at 30 fps), 1.53 mrad steps and a slew limit. Residual = measured direction minus the mount's angle, so the mount follows the slow wander away and only the fast motion it cannot track, plus lag and step size, is charged as pointing error. In a 20 s windy sim at 30 fps this takes the mean residual from 12.8 to 1.4 mrad and leaves drift and jitter unchanged. The residual is therefore a model of a mount, not a hardware measurement; say so when presenting. `--no-virtual-mount` restores the raw image-centre offset.
 
 * No search detector and no steering: the beacon is acquired anywhere in view (`TrackerConfig.fixed_camera`), or only inside `--zone x0,y0,x1,y1` so lamps and windows outside it cannot steal the lock.
 * `--beacon blink` (default) uses the lock-in detector; `--beacon steady` finds a constantly-lit LED as the brightest small spot (`vision.SteadySpotDetector`), which needs a dark scene.
 * `--calibrate N` records the boresight and full-signal brightness over N seconds of calm hover and saves `calibration.json`; later runs load it.
+* `gimbal_lag_mrad` is the virtual mount's commanded-minus-actual angle.
 * No pose estimator is wired in, so `lean_deg` is 0 and `range_m` is `nominal_range_m` (3 m). The drone-lean error bar stays empty on the real rig.
 * The frame-count settings (`acquire_frames`, `coast_frames`, ROI size) are rescaled from their 120 fps / 480 px defaults.
 * `tools/camera_check.py` measures the real fps, dropped frames, exposure drift, the lock-in noise floor and the beacon SNR, and prints the settings to use.

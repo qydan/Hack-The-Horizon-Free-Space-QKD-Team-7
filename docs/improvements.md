@@ -3,23 +3,13 @@
 Found during the repo sweep on 2026-11-09. Ordered roughly by how much each one affects the
 live demo. Items 1-3 and 8 are also tracked in `TODO.md`.
 
-## 1. Fixed-camera residual (biggest issue)
+## 1. Fixed-camera residual (fixed)
 
-With no gimbal (`tracker.py --source camera`, `FixedGimbal`), `residual_mrad` is the beacon's
-distance from the image centre. Nothing steers, so all of the drone's wander counts as ground
-pointing error against the 10 mrad virtual receiver (`BudgetParams.theta_fov_mrad`).
-
-At the default operating point (`--snr 50`), `tools/tune.py` reports 10.6 dB of extra loss to
-reach the 11% gate. That is a residual of about 11 mrad, roughly 3 cm at 3 m, so a real hover
-would abort almost constantly.
-
-Options:
-- Measure the residual from the calibrated boresight instead of the image centre.
-- Emulate the gimbal in software (steer a virtual pointing direction with `SimGimbal` dynamics
-  and report the residual against it).
-- Wire in the real gimbal.
-
-Where: `GroundTracker.update` in `src/tracker.py` (`resid = hypot(off)`).
+The residual is now measured against a virtual pan-tilt mount (`SimGimbal`, 60 ms lag, 1.53 mrad
+steps) that the tracker steers from its Kalman prediction (`--virtual-mount`, default on for
+`--source camera`). In a 20 s windy sim at 30 fps the mean residual drops from 12.8 to 1.4 mrad;
+drift and jitter are unchanged. The residual is a model of a mount, not a hardware measurement.
+`--no-virtual-mount` restores the old image-centre offset.
 
 ## 2. No lean or range on the real camera
 
@@ -56,14 +46,13 @@ cleaner.
 - `tools/tune.py` prints `-0.0` dB for the on-axis row.
 - `describe_block` in `src/demo_runner.py` ignores its `quiet` argument.
 
-## 7. The test suite takes about 7.5 minutes
+## 7. The test suite takes about 4 minutes (fixed)
 
-Most of the time is the tracker tests, which render simulated camera frames. A `slow` pytest
-marker (and `pytest -m "not slow"` for quick runs) would make the suite practical to run after
-small changes.
+Ten tests (subprocess runs in `tests/test_demo_and_tools.py` and the simulated-camera tracker
+runs in `tests/test_tracker.py`) now carry a `slow` marker, registered in `pytest.ini`.
+`pytest -m "not slow"` runs the other 148 tests in about 30 s.
 
-## 8. The design `.docx` is untracked and names team members
+## 8. The design `.docx` name and status (fixed)
 
-`Drone QKD demo system diagram explained.docx` is cited as the source of truth by the README
-and `docs/system_architecture.md` but is not in git, and it names team members. Decide whether
-it belongs in the repo before committing; if not, reword the references.
+The file is public-safe, so it stays in the repo, renamed to `original_design.docx`. The README
+and docs now call it the early design brief, not the source of truth.

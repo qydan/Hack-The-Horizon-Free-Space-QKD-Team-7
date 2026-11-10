@@ -12,16 +12,16 @@ telemetry. What remains is mostly hardware validation, calibration and presentat
 
 ## 2. Real rig bring-up (before the event)
 Goal: prove the real-camera path works end to end. Procedure: `docs/hardware_handoff.md`.
-- [ ] Build the beacon (13 Hz, 100% / 40%, never fully off) or the retroreflector + blinking ring light.
-- [ ] Run `python tools/camera_check.py` on Windows Python (not WSL) until it reports READY; note fps, `min_amplitude`, blink rate.
-- [ ] Lock exposure and gain; confirm intensity is steady at calm hover.
+- [ ] Build the beacon (red LED, 7.5 Hz, 100% / 40%, never fully off) or the retroreflector + blinking ring light.
+- [ ] Run `python tools/camera_check.py --fps 30 --blink-hz 7.5` on Windows Python (not WSL) until it reports READY; note fps, `min_amplitude`, blink rate.
+- [ ] Exposure is locked on the Action 5 Pro; confirm intensity is steady at calm hover.
 - [ ] Calibrate in calm hover: `python src/tracker.py --source camera --calibrate 15 --duration 1` (saves `calibration.json`).
 - [ ] Check: lens cover drops the state to `COAST` / `SEARCH` and tracking returns when removed.
 - [ ] Check: first `TRACK` lock under 60 s, tracking held for a full 120 s.
 - [ ] Record fallback CSVs (`calm.csv`, `fan.csv`, `obstruct.csv`, `demo.csv`) with `demo_runner.py --source zmq --record ...`.
 
 ## 3. Software gaps
-- [ ] **Fixed-camera residual.** With no gimbal the residual is the beacon's distance from the image centre, so the drone's whole wander is charged against the 10 mrad virtual receiver (about 3 cm at 3 m reaches the gate). Decide: measure the residual from the calibrated boresight, emulate the gimbal in software, or wire in the real gimbal.
+- [x] **Fixed-camera residual.** Done in software: the residual is measured against a virtual `SimGimbal` mount (`--virtual-mount`, default on). Still to decide: present it as a modelled mount, and check `--mount-latency` against the real Action 5 Pro latency if you can measure it.
 - [ ] Wire the real gimbal: a `gimbal.Gimbal` subclass for the driver and a `build_*` function in `tracker.py` (timestamp encoder reads to the frame time).
 - [ ] Pose on the real camera: pass `vision.AprilTagPose` as `pose_fn` in `build_camera` (lean and range are 0 / 3 m today, so the drone-lean error bar is empty).
 - [ ] `tracker.py --source camera`: add `--exposure` (it does not lock exposure itself).
@@ -53,6 +53,6 @@ Goal: prove the real-camera path works end to end. Procedure: `docs/hardware_han
 
 ## 7. Housekeeping
 - [ ] Commit the redesign (most of `src/`, `tests/`, `tools/` and the docs are uncommitted or untracked).
-- [ ] Decide whether `Drone QKD demo system diagram explained.docx` belongs in the repo (it names team members).
+- [x] Design `.docx` stays in the repo as `original_design.docx`, marked as an early, partly outdated brief.
 - [ ] Delete `docs/transfer_function_derivation.md` once nobody needs the old model's reasoning.
-- [ ] Re-run `pytest tests/ -v` after any error-budget or tracker change (takes several minutes).
+- [ ] Re-run `pytest tests/ -v` after any error-budget or tracker change (about 4 minutes; `-m "not slow"` for a quick run).

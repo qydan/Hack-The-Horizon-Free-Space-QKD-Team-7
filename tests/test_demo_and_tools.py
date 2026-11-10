@@ -4,6 +4,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 PY = sys.executable
 
@@ -13,6 +15,7 @@ def run(*args, timeout=300):
                           capture_output=True, text=True, cwd=ROOT, timeout=timeout)
 
 
+@pytest.mark.slow
 def test_csv_run_log_and_dashboard(tmp_path):
     log, keys = tmp_path / "run.jsonl", tmp_path / "keys.jsonl"
     r = run("--source", "csv", "--quiet", "--log", str(log), "--keys-out", str(keys))
@@ -32,16 +35,19 @@ def test_csv_run_log_and_dashboard(tmp_path):
     assert html.startswith("<!doctype html>") and "<svg" in html and "Two error bars" in html
 
 
+@pytest.mark.slow
 def test_eve_aborts_every_block():
     r = run("--source", "csv", "--eve", "0.5", "--quiet")
     assert r.returncode == 0 and "0 keys in the key store" in r.stdout and " key" not in r.stdout.split("DONE")[1].split("\n")[0]
 
 
+@pytest.mark.slow
 def test_pns_is_caught_by_decoy_states():
     r = run("--source", "csv", "--pns", "--quiet")
     assert "decoy_abort" in r.stdout and "0 keys in the key store" in r.stdout
 
 
+@pytest.mark.slow
 def test_record_and_replay(tmp_path):
     rec = tmp_path / "rec.csv"
     r = run("--source", "csv", "--quiet", "--record", str(rec))
@@ -62,6 +68,7 @@ def test_dose_response_tool_prints_both_error_bars():
     assert r.returncode == 0 and "Ground residual" in r.stdout and "Drone lean" in r.stdout and "<- gate" in r.stdout
 
 
+@pytest.mark.slow
 def test_two_programs_over_zeromq():
     """Tracker and sandbox as separate processes, joined only by the telemetry stream (and the
     abort / re-acquire command back)."""
