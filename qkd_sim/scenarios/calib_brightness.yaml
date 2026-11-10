@@ -1,0 +1,15 @@
+# Preflight brightness: modulated beacon at a known range (4 m static tripod), exposure gain recorded.
+test: calibration
+description: Known-range brightness reference with the static beacon at 4 m.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: none
+fidelity: full
+seed: 806
+duration_s: 30
+drone: {enabled: false}
+props: {static_beacons: true}
+pose_tracks:
+  static_beacon_near:
+    - {t_s: 0, xyz: [1.0, 0.0, -20.0]}
+lighting: {initial: office_50hz}

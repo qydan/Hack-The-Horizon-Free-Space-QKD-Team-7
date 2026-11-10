@@ -1,0 +1,21 @@
+# T4 lighting: cycle dark, office (50 Hz and 60 Hz), bright_lamp, window, distractors.
+test: T4
+description: Cycle every lighting scenario, 40 s each, drone hovering with the fan low.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: full
+seed: 404
+duration_s: 270
+drone: {enabled: true, wander: true}
+fan: {schedule: [{t_s: 0, level: low}]}
+lighting:
+  initial: dark
+  schedule:
+    - {t_s: 0,   scenario: dark}
+    - {t_s: 40,  scenario: office_50hz}
+    - {t_s: 80,  scenario: office_60hz}
+    - {t_s: 120, scenario: bright_lamp}
+    - {t_s: 160, scenario: window}
+    - {t_s: 200, scenario: distractors}

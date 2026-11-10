@@ -1,0 +1,29 @@
+# ZeroMQ ports (section 11.1). All on 127.0.0.1. The same bus is used by the real system.
+host: 127.0.0.1                         # SPEC
+
+ports:
+  telemetry: 5556                       # SPEC I2 tracking -> sandbox
+  abort: 5557                           # SPEC I8 sandbox gate -> tracking
+  photodiode: 5558                      # SPEC I9 photodiode sensor -> tracking (optional)
+  keys: 5559                            # SPEC I4 sandbox -> operator display
+  eve: 5560                             # SPEC I6 operator UI -> sandbox
+  truth: 5590                           # SPEC ground truth: EVALUATION ONLY
+
+# Simulator-internal ports (not part of the I-interfaces, never given to tracking/ or sandbox/).
+internal_ports:
+  gimbal_state: 5570                    # ESTIMATE Storm32GimbalSim readback (server in the bridge host -> GimbalIO clients)
+  gimbal_cmd: 5573                      # ESTIMATE GimbalIO clients -> Storm32GimbalSim set_target
+  frames_meta: 5571                     # ESTIMATE frame-source metadata for frames_meta.csv
+  sim_events: 5572                      # ESTIMATE occluder, lighting and fan schedule events (for the recorder)
+
+allow_list:
+  tracking: [5556, 5557, 5558]          # SPEC (gimbal and frames arrive through in-process sim_bridge interfaces)
+  sandbox: [5556, 5557, 5559, 5560]     # SPEC
+
+topics:                                 # first frame of every multipart message
+  telemetry: telemetry
+  abort: abort
+  photodiode: photodiode
+  keys: keys
+  eve: eve
+  truth: truth

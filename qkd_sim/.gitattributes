@@ -1,0 +1,13 @@
+# Files that run inside Linux (Docker / PX4) must keep LF line endings, even when checked out on Windows.
+*.sh            text eol=lf
+qkd             text eol=lf
+px4/airframes/* text eol=lf
+docker/*        text eol=lf
+*.py            text eol=lf
+*.yaml          text eol=lf
+*.sdf           text eol=lf
+*.config        text eol=lf
+*.json          text eol=lf
+# Windows launcher
+*.cmd           text eol=crlf
+*.png           binary

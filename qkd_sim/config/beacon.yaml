@@ -1,0 +1,47 @@
+# Tracking targets (section 6). Every target must be visible light: the Action 5 Pro has an IR-cut filter.
+target: red_led                         # red_led | tag (scenarios override)
+
+red_led:
+  wavelength_nm: 630                    # SPEC about 630 nm red LEDs
+  n_leds: 3                             # SPEC 2-3 LEDs
+  diffuser_diameter_m: 0.040            # SPEC ping-pong ball
+  emissive_rgb_full: [1.0, 0.05, 0.02]  # ESTIMATE emissive colour at 100% (tune so the rendered core is just below 255 at gain 1)
+  diffuse_rgb: [0.9, 0.85, 0.8]         # ESTIMATE ping-pong-ball white plastic
+  modulation:
+    enabled: true
+    frequency_hz: 7.0                   # SPEC clear of 50 Hz->10 Hz and 60 Hz->0 Hz aliases at 30 fps
+    high_level: 1.00                    # SPEC
+    low_level: 0.40                     # SPEC never off
+    duty: 0.5                           # SPEC square wave
+    phase_s: 0.0                        # ESTIMATE
+  # Runtime material change method, in order of preference (section 6.1). beacon_modulator.py tries them in order.
+  methods: [visual_config, plugin, shell_toggle]
+  update_rate_hz: 1000.0                # ESTIMATE one update per physics step; edges only matter, so 2 updates/period would do
+
+tag:
+  dictionary: DICT_4X4_50               # SPEC
+  id: 0                                 # SPEC configurable
+  outer_edge_m: 0.08                    # SPEC
+  border_bits: 1                        # SPEC ArUco standard 1-bit black border
+  white_margin_m: 0.01                  # ESTIMATE matte white quiet zone around the marker
+  texture_px: 512                       # ESTIMATE generated texture size
+  emissive_white_full: 0.8              # ESTIMATE emulates retroreflection under the ring light
+  modulate_with_ring_light: false       # optional: ring light at 7 Hz too
+
+ring_light:
+  inner_diameter_m: 0.05                # ESTIMATE
+  outer_diameter_m: 0.09                # ESTIMATE
+  power_on: true
+
+pendulum:
+  string_length_m: 1.0                  # SPEC
+  joint_damping_nms_per_rad: 0.0005     # ESTIMATE light damping
+  stand_height_m: 2.2                   # ESTIMATE pivot so the beacon hangs at 1.2 m
+
+ir_beacon_reference:                    # used only by the IR-cut validation (A10)
+  wavelength_nm: 850                    # SPEC
+
+camera_passband_nm: [400, 680]          # SPEC behaviour (IR-cut filter); used by scenario validation
+
+texture:
+  flip_horizontal: false                # set true if the tag appears mirrored in view_camera.py (plane UV orientation)

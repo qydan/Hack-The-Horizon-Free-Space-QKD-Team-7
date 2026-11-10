@@ -1,0 +1,24 @@
+# Gimbal response (rig_gimbal only): pan/tilt step commands, a large slew for the rate limit, then a
+# 120 s hold for readback noise and pan drift.
+test: calibration
+description: Gimbal step, slew and hold commands for response / noise / drift identification.
+world: qkd_lab
+rigs: [rig_gimbal]
+payload: none
+fidelity: fast
+seed: 803
+duration_s: 160
+drone: {enabled: false}
+gimbal:
+  command_schedule:               # angles in degrees; played by the bridge host when tracking is not running
+    - {t_s: 1,  pan_deg: 0.0,  tilt_deg: 3.81}
+    - {t_s: 3,  pan_deg: 2.0,  tilt_deg: 3.81}
+    - {t_s: 5,  pan_deg: 2.0,  tilt_deg: 5.81}
+    - {t_s: 7,  pan_deg: 0.0,  tilt_deg: 3.81}
+    - {t_s: 9,  pan_deg: -5.0, tilt_deg: 3.81}
+    - {t_s: 11, pan_deg: 0.0,  tilt_deg: 3.81}
+    - {t_s: 13, pan_deg: 60.0, tilt_deg: 3.81}
+    - {t_s: 17, pan_deg: -60.0, tilt_deg: 3.81}
+    - {t_s: 22, pan_deg: 0.0,  tilt_deg: -40.0}
+    - {t_s: 26, pan_deg: 0.0,  tilt_deg: 3.81}
+lighting: {initial: office_50hz}

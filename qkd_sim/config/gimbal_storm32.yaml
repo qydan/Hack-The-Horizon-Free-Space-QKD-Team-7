@@ -1,0 +1,44 @@
+# Config B gimbal emulation (section 8.3). Storm32GimbalSim reads this.
+mass_kg: 0.200                          # ESTIMATE
+limits_deg:
+  pan: [-150.0, 150.0]                  # MEASURE (cable-limited on many cheap gimbals)
+  tilt: [-90.0, 30.0]                   # SPEC typical
+  roll: [0.0, 0.0]                      # SPEC held level
+
+command:
+  max_rate_hz: 50.0                     # ESTIMATE setpoints faster than this are dropped (latest wins)
+  latency_s: 0.020                      # ESTIMATE serial + controller loop
+
+response:
+  natural_frequency_hz: 6.0             # ESTIMATE; MEASURE with step commands
+  damping_ratio: 0.7                    # ESTIMATE
+  rate_limit_dps: 120.0                 # ESTIMATE per axis
+  integration_dt_s: 0.001               # ESTIMATE matches the physics step
+
+holding_jitter:
+  rms_deg: 0.02                         # ESTIMATE; MEASURE (T1 gimbal active vs off)
+  band_hz: [10.0, 30.0]                 # ESTIMATE band-limited
+
+readback:
+  rate_hz: 50.0                         # ESTIMATE
+  noise_rms_deg: 0.05                   # ESTIMATE IMU-based attitude, no encoders
+  pan_drift_deg_per_min: 0.2            # ESTIMATE random-walk bias (no magnetometer); 1-sigma growth rate per sqrt(min)
+
+joint_control:                          # gz JointPositionController (velocity-command mode, so the joint follows the emulator)
+  use_velocity_commands: true           # joint velocity = p_gain * position error
+  p_gain: 1000.0                        # ESTIMATE = 1 / physics step: dead-beat, the joint reaches the target in one step
+  i_gain: 0.0                           # ESTIMATE
+  d_gain: 0.0                           # ESTIMATE
+  cmd_max: 100.0                        # ESTIMATE rad/s velocity clamp (well above the 120 deg/s emulated rate limit)
+  topics:                               # gz topics the emulator publishes joint targets on
+    pan: /qkd/gimbal/pan/cmd_pos
+    roll: /qkd/gimbal/roll/cmd_pos
+    tilt: /qkd/gimbal/tilt/cmd_pos
+
+offset_schedule: []                     # T6 only: list of {t_s, pan_mrad, tilt_mrad}; added after the controller target
+
+real_hardware:                          # Storm32Gimbal (stub)
+  serial_port: /dev/ttyUSB0             # MEASURE
+  baud: 115200                          # SPEC STorM32 default
+  mavlink_system_id: 255                # ESTIMATE laptop as a GCS
+  gimbal_component_id: 154              # SPEC MAV_COMP_ID_GIMBAL

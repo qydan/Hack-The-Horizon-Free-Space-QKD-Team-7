@@ -1,0 +1,19 @@
+# Optional D3 roadmap: drone at 300 m range, 50 m altitude, GNSS hover wander (+-1.5 m), rig_gimbal.
+# A 40 mm beacon subtends ~0.13 mrad (a tenth of a pixel) at 300 m, so the beacon is scaled up by
+# world.yaml mission.beacon_scale (10x -> 0.4 m). Treat results as a demonstration that a commercial system
+# needs a narrow-field camera.
+test: D3
+description: Long-range mission demo at 300 m with a 10x scaled beacon and GNSS hover wander.
+world: qkd_field
+rigs: [rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: fast
+seed: 1001
+duration_s: 180
+drone: {enabled: true, wander: true, gnss_wander: true}
+lighting: {initial: office_50hz}
+overrides:
+  rigs:
+    rig_gimbal:
+      initial_tilt_deg: 9.3       # atan((50 - 1) / 300)

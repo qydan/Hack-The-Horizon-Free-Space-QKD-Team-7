@@ -32,6 +32,7 @@ Two separate Python programs on one laptop, joined only by a ZeroMQ telemetry st
 | `src/sandbox.py` | the key segment end to end, gate, key store |
 | `src/demo_runner.py` | runs it: `--source sim | csv | zmq` |
 | `tools/` | `generate_fake_telemetry.py`, `tune.py` (dose-response, test T6), `make_dashboard.py`, `live_dashboard.py` (live charts while a run is going), `camera_check.py` (camera bring-up) |
+| `qkd_sim/` | Gazebo Harmonic + PX4 SITL digital twin of the rig (Mini 2 SE stand-in, 7 Hz beacon, desk fan, Action 5 Pro on a fixed mount or STorM32 gimbal), self-contained with its own tests. Start with `qkd_sim\qkd doctor`; see [`qkd_sim/README.md`](qkd_sim/README.md) |
 
 ## Setup
 

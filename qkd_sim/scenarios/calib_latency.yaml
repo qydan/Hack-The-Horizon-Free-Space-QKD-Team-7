@@ -1,0 +1,23 @@
+# Latency: static beacon switched at known sim times (modulation replaced by the events below).
+test: calibration
+description: Beacon switched on/off at known sim times for capture-to-frame latency.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: none
+fidelity: full
+seed: 805
+duration_s: 40
+drone: {enabled: false}
+props: {static_beacons: true}
+pose_tracks:
+  static_beacon_far:
+    - {t_s: 0, xyz: [4.0, 0.0, -20.0]}
+beacon_events:                    # model, t_s, level (0 = off for this test only)
+  - {model: static_beacon_near, t_s: 0.0,    level: 0.0}
+  - {model: static_beacon_near, t_s: 5.013,  level: 1.0}
+  - {model: static_beacon_near, t_s: 10.027, level: 0.0}
+  - {model: static_beacon_near, t_s: 15.041, level: 1.0}
+  - {model: static_beacon_near, t_s: 20.055, level: 0.0}
+  - {model: static_beacon_near, t_s: 25.069, level: 1.0}
+  - {model: static_beacon_near, t_s: 30.083, level: 0.0}
+lighting: {initial: office_50hz}

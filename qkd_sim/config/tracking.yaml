@@ -1,0 +1,34 @@
+# [OPEN] Tracking configuration. Keys only; the team fills in values.
+acquire:
+  lockin_frequency_hz: null
+  lockin_window_frames: null
+  red_channel_threshold: null
+  aruco_dictionary: null
+  aruco_id: null
+  min_confidence: null
+track:
+  roi_size_px: null
+  saturation_level: null
+  rolling_shutter_readout_s: null
+kalman:
+  process_noise_rad2_per_s3: null
+  measurement_noise_rad: null
+  mahalanobis_gate: null
+pointing:
+  mode_rig_fixed: null                  # fixed_boresight | virtual_receiver
+  virtual_receiver_lag_s: null
+  feedforward_gain: null
+  pi_kp: null
+  pi_ki: null
+  command_rate_hz: null
+state_machine:
+  acquire_frames: null
+  coast_timeout_s: null
+  lost_timeout_s: null
+motion_estimate:
+  drift_window_s: null
+  jitter_window_s: null
+pose:
+  tag_size_m: null
+telemetry_out:
+  publish_rate: null

@@ -1,0 +1,27 @@
+# T6 causality: fan off -> low -> high plus a slow-push drift. In rig_gimbal the gimbal is deliberately
+# mis-pointed by offset steps of 0, 1, 2, 4, 8 mrad (added after the controller target).
+test: T6
+description: Fan off/low/high plus slow push; rig_gimbal adds 0-8 mrad deliberate mis-pointing steps.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: full
+seed: 606
+duration_s: 300
+drone: {enabled: true, wander: true, slow_push_at_s: 200}
+fan:
+  schedule:
+    - {t_s: 0,   level: "off"}
+    - {t_s: 60,  level: low}
+    - {t_s: 120, level: high}
+lighting: {initial: office_50hz}
+overrides:
+  gimbal_storm32:
+    offset_schedule:              # rig_gimbal only
+      - {t_s: 0,   pan_mrad: 0.0, tilt_mrad: 0.0}
+      - {t_s: 20,  pan_mrad: 1.0, tilt_mrad: 0.0}
+      - {t_s: 40,  pan_mrad: 2.0, tilt_mrad: 0.0}
+      - {t_s: 60,  pan_mrad: 4.0, tilt_mrad: 0.0}
+      - {t_s: 80,  pan_mrad: 8.0, tilt_mrad: 0.0}
+      - {t_s: 100, pan_mrad: 0.0, tilt_mrad: 0.0}

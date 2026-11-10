@@ -1,0 +1,12 @@
+# Support scenario for acceptance test A7: beacon moving sideways at 1 m/s at 3 m range.
+test: A7
+description: Beacon sliding sideways at 1 m/s at 3 m for the rolling-shutter skew check.
+world: qkd_lab
+rigs: [rig_fixed]
+payload: none
+fidelity: full
+seed: 1101
+duration_s: 4
+drone: {enabled: false}
+props: {slider_beacon: true}
+lighting: {initial: dark}

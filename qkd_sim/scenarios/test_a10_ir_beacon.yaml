@@ -1,0 +1,8 @@
+# Support scenario for acceptance test A10: MUST be rejected (850 nm beacon, Action 5 Pro has an IR-cut filter).
+test: A10
+description: Invalid on purpose - an 850 nm beacon is invisible to the Action 5 Pro.
+world: qkd_lab
+rigs: [rig_fixed]
+payload: red_led_beacon
+beacon_wavelength_nm: 850
+duration_s: 10

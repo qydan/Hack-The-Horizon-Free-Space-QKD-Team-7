@@ -1,0 +1,12 @@
+# Rolling-shutter readout: beacon on a spinning arm (2 rev/s, 0.3 m) at 3 m.
+test: calibration
+description: Beacon on a spinning arm for rolling-shutter readout estimation.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: none
+fidelity: full
+seed: 804
+duration_s: 30
+drone: {enabled: false}
+props: {spinning_arm: true}
+lighting: {initial: dark}

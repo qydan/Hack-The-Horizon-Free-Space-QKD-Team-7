@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Linux/macOS launcher for qkd.py: uses the project's .venv if there is one. Usage:  ./qkd doctor
+HERE="$(cd "$(dirname "$0")" && pwd)"
+PY=python3
+[ -x "$HERE/../.venv/bin/python" ] && PY="$HERE/../.venv/bin/python"
+[ -x "$HERE/.venv/bin/python" ] && PY="$HERE/.venv/bin/python"
+exec "$PY" "$HERE/qkd.py" "$@"

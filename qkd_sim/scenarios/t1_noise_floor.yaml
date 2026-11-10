@@ -1,0 +1,30 @@
+# T1 noise floor: static red beacon at 1 m, then 4 m, 60 s each.
+# rig_gimbal: first pass with the gimbal motors off (no holding jitter), second pass with the gimbal active.
+test: T1
+description: Static modulated red beacon at 1 m then 4 m; rig_gimbal repeats with the gimbal active.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: none
+target: red_led
+fidelity: full
+seed: 101
+duration_s: 240
+drone: {enabled: false}
+props: {static_beacons: true}
+pose_tracks:                      # show one beacon at a time (the other parked below the floor)
+  static_beacon_near:
+    - {t_s: 0,   xyz: [1.0, 0.0, 1.0]}
+    - {t_s: 60,  xyz: [1.0, 0.0, -20.0]}
+    - {t_s: 120, xyz: [1.0, 0.0, 1.0]}
+    - {t_s: 180, xyz: [1.0, 0.0, -20.0]}
+  static_beacon_far:
+    - {t_s: 0,   xyz: [4.0, 0.0, -20.0]}
+    - {t_s: 60,  xyz: [4.0, 0.0, 1.0]}
+    - {t_s: 120, xyz: [4.0, 0.0, -20.0]}
+    - {t_s: 180, xyz: [4.0, 0.0, 1.0]}
+gimbal:
+  active_schedule:                # rig_gimbal only; ignored by rig_fixed
+    - {t_s: 0,   active: false}
+    - {t_s: 120, active: true}
+fan: {schedule: [{t_s: 0, level: "off"}]}
+lighting: {initial: office_50hz}

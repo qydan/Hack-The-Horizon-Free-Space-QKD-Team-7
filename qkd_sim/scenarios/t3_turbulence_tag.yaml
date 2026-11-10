@@ -1,0 +1,17 @@
+# T3 with the ArUco tag + ring light instead of the red beacon (pose / lean estimate; expect ~21 px tag at 3 m).
+test: T3
+description: T3 with the 8 cm ArUco tag and ring light (lean estimate limits).
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: tag
+target: tag
+fidelity: full
+seed: 304
+duration_s: 380
+drone: {enabled: true, wander: true}
+fan:
+  schedule:
+    - {t_s: 0,   level: "off"}
+    - {t_s: 140, level: low}
+    - {t_s: 260, level: high}
+lighting: {initial: office_50hz}

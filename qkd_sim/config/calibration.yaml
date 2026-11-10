@@ -1,0 +1,26 @@
+# [OPEN] Calibration outputs. Keys only; calibration/ writes the values.
+intrinsics:
+  model: null                           # cv2.fisheye
+  K: null
+  D: null
+  image_size_px: null
+  rms_reprojection_px: null
+mount_alignment:
+  rig: null
+  yaw_deg: null
+  pitch_deg: null
+  roll_deg: null
+gimbal_response:
+  natural_frequency_hz: null
+  damping_ratio: null
+  rate_limit_dps: null
+  readback_noise_rms_deg: null
+  pan_drift_deg_per_min: null
+rolling_shutter:
+  readout_s: null
+latency:
+  capture_to_frame_s: null
+preflight_brightness:
+  i_cal: null
+  range_m: null
+  exposure_gain: null

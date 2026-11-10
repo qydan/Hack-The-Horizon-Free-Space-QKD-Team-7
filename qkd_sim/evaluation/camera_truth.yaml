@@ -1,0 +1,38 @@
+# EVALUATION ONLY. Never read by calibration/ or tracking/ (test B1).
+model: cv2.fisheye (equidistant, D = 0)
+image_size_px:
+- 1920
+- 1080
+K:
+- - 785.7706904651291
+  - 0.0
+  - 967.5
+- - 0.0
+  - 785.7706904651291
+  - 534.5
+- - 0.0
+  - 0.0
+  - 1.0
+D:
+- 0.0
+- 0.0
+- 0.0
+- 0.0
+f_px: 785.7706904651291
+hfov_deg: 140.0
+vfov_deg: 78.75
+ifov_mrad_per_px_centre: 1.2726359129125318
+principal_point_offset_px:
+- 8.0
+- -5.0
+rig: rig_fixed
+render_sensor_type: wideanglecamera
+mount_error_deg:
+  yaw: 0.5
+  pitch: -0.3
+  roll: 0.4
+lens_height_m: 1.0
+nominal_pan_deg: 0.0
+nominal_tilt_deg: 3.81
+rolling_shutter_readout_s: 0.015
+latency_s: 0.15

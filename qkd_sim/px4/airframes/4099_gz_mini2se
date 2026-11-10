@@ -1,0 +1,81 @@
+#!/bin/sh
+#
+# @name DJI Mini 2 SE stand-in (qkd_sim)
+#
+# @type Quadrotor
+# @class Copter
+#
+# @maintainer qkd_sim
+#
+# Generated values come from qkd_sim/config/drone.yaml (section 5 of the build spec):
+#   rotor positions  +-0.0753 m (213 mm motor diagonal, X layout)       ESTIMATE / MEASURE
+#   max thrust 1.2 N per motor, quadratic thrust model (THR_MDL_FAC 1)  ESTIMATE
+#   hover thrust ~0.50 (0.246 kg) to ~0.54 (with the 18 g beacon)       ESTIMATE, verify with test A3
+# Rate gains: PX4 defaults scaled by 0.5, because the Mini has roughly twice the x500's
+# torque-to-inertia ratio (0.18 N m / 6.7e-4 kg m^2 vs 2.96 N m / 0.0217 kg m^2). Check the step response.
+
+. ${R}etc/init.d/rc.mc_defaults
+
+PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
+PX4_GZ_WORLD=${PX4_GZ_WORLD:=qkd_lab}
+PX4_SIM_MODEL=${PX4_SIM_MODEL:=mini2se}
+
+
+# --- control allocation (FRD body frame: +x forward, +y right) -------------------------------
+param set-default CA_AIRFRAME 0
+param set-default CA_ROTOR_COUNT 4
+# rotor 0: front-right, CCW
+param set-default CA_ROTOR0_PX 0.0753
+param set-default CA_ROTOR0_PY 0.0753
+param set-default CA_ROTOR0_KM 0.016
+# rotor 1: rear-left, CCW
+param set-default CA_ROTOR1_PX -0.0753
+param set-default CA_ROTOR1_PY -0.0753
+param set-default CA_ROTOR1_KM 0.016
+# rotor 2: front-left, CW
+param set-default CA_ROTOR2_PX 0.0753
+param set-default CA_ROTOR2_PY -0.0753
+param set-default CA_ROTOR2_KM -0.016
+# rotor 3: rear-right, CW
+param set-default CA_ROTOR3_PX -0.0753
+param set-default CA_ROTOR3_PY 0.0753
+param set-default CA_ROTOR3_KM -0.016
+
+# --- gz ESC outputs: command = rotor speed 0..1000 rad/s, so thrust ~ u^2 exactly --------------
+param set-default SIM_GZ_EC_FUNC1 101
+param set-default SIM_GZ_EC_FUNC2 102
+param set-default SIM_GZ_EC_FUNC3 103
+param set-default SIM_GZ_EC_FUNC4 104
+param set-default SIM_GZ_EC_MIN1 0
+param set-default SIM_GZ_EC_MIN2 0
+param set-default SIM_GZ_EC_MIN3 0
+param set-default SIM_GZ_EC_MIN4 0
+param set-default SIM_GZ_EC_MAX1 1000
+param set-default SIM_GZ_EC_MAX2 1000
+param set-default SIM_GZ_EC_MAX3 1000
+param set-default SIM_GZ_EC_MAX4 1000
+param set-default THR_MDL_FAC 1.0
+
+# --- DJI Mini 2 SE envelope (SPEC) ------------------------------------------------------------
+param set-default MPC_XY_VEL_MAX 16
+param set-default MPC_Z_VEL_MAX_UP 5
+param set-default MPC_Z_VEL_MAX_DN 3.5
+param set-default MPC_TILTMAX_AIR 40
+param set-default MPC_THR_HOVER 0.50
+param set-default MPC_USE_HTE 1
+
+# --- rate gains (PX4 defaults x 0.5, ESTIMATE; tune with the step response) -----------------
+param set-default MC_ROLLRATE_P 0.075
+param set-default MC_ROLLRATE_I 0.1
+param set-default MC_ROLLRATE_D 0.0015
+param set-default MC_PITCHRATE_P 0.075
+param set-default MC_PITCHRATE_I 0.1
+param set-default MC_PITCHRATE_D 0.0015
+param set-default MC_YAWRATE_P 0.1
+param set-default MC_YAWRATE_I 0.05
+
+# --- offboard-only operation from MAVSDK (no RC in simulation) --------------------------------
+param set-default NAV_RCL_ACT 0
+param set-default NAV_DLL_ACT 0
+param set-default COM_RCL_EXCEPT 4
+param set-default COM_OF_LOSS_T 2.0

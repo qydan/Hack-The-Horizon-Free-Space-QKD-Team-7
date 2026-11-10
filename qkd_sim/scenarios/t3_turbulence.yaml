@@ -1,0 +1,22 @@
+# T3 turbulence: hover 2 min each at fan off / low / high; occluder passes at t = 30, 70, 100 s.
+test: T3
+description: Hover 2 min each at fan off, low and high, with three occluder passes.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: full
+seed: 303
+duration_s: 380
+drone: {enabled: true, wander: true}
+fan:
+  schedule:
+    - {t_s: 0,   level: "off"}
+    - {t_s: 140, level: low}
+    - {t_s: 260, level: high}
+occluder:
+  events:
+    - {t_s: 30,  duration_s: 0.6, fraction_of_range: 0.5, sweep_m: 0.4}
+    - {t_s: 70,  duration_s: 0.6, fraction_of_range: 0.5, sweep_m: 0.4}
+    - {t_s: 100, duration_s: 0.6, fraction_of_range: 0.5, sweep_m: 0.4}
+lighting: {initial: office_50hz}

@@ -1,0 +1,82 @@
+# DJI Mini 2 SE stand-in (section 5).
+model_name: mini2se
+
+spec:
+  takeoff_mass_kg: 0.246                # SPEC DJI spec page (marketed < 249 g)
+  folded_lwh_m: [0.138, 0.081, 0.058]   # SPEC folded, no props
+  unfolded_lwh_m: [0.245, 0.289, 0.056] # SPEC unfolded, with props
+  battery_mass_kg: 0.0825               # SPEC 2S Li-ion 2250 mAh
+  max_horizontal_speed_mps: 16.0        # SPEC
+  max_ascent_mps: 5.0                   # SPEC
+  max_descent_mps: 3.5                  # SPEC
+  max_pitch_deg: 40.0                   # SPEC
+  max_wind_resistance_mps: 10.7         # SPEC
+  hover_accuracy_vision_m: {vertical: 0.1, horizontal: 0.3}   # SPEC
+  hover_accuracy_gnss_m: {vertical: 0.5, horizontal: 1.5}     # SPEC
+  drone_gimbal_vibration_deg: 0.01      # SPEC
+
+geometry:
+  motor_diagonal_m: 0.213               # ESTIMATE Mini 2 family figure; MEASURE with a ruler
+  rotor_z_m: 0.02                       # ESTIMATE rotor plane above body centre
+  prop_radius_m: 0.06                   # ESTIMATE 0.12 m props
+  arm_mass_kg: 0.020                    # ESTIMATE per arm+motor point mass (x4)
+  body_mass_kg: 0.166                   # ESTIMATE body + battery box (0.246 - 4*0.020)
+  rotor_link_mass_kg: 0.0005            # ESTIMATE per prop link (gz needs a non-zero mass); adds 2 g in total
+  prop_visual_thickness_m: 0.004        # ESTIMATE visual only
+
+motor:                                  # PX4 x500 conventions, scaled (section 5.2)
+  max_rot_velocity: 1000.0              # ESTIMATE (x500 convention)
+  rotor_velocity_slowdown_sim: 10       # ESTIMATE (x500 convention)
+  motor_constant: 1.2e-6                # ESTIMATE -> 1.2 N max thrust per motor
+  moment_constant: 0.016                # ESTIMATE
+  time_constant_up_s: 0.0125            # ESTIMATE
+  time_constant_down_s: 0.025           # ESTIMATE
+  rotor_drag_coefficient: 1.066e-5      # ESTIMATE x500 8.06428e-05 * (0.12/0.33)^2
+  rolling_moment_coefficient: 1.32e-7   # ESTIMATE x500 1e-06 * (0.12/0.33)^2
+
+aero:
+  body_cd_area_m2: 0.02                 # ESTIMATE 4 m/s crosswind -> ~4.5 deg lean; MEASURE in T3
+  air_density_kgpm3: 1.2                # SPEC (standard air)
+
+px4:
+  airframe_id: 4099                     # ESTIMATE pick an unused number; install script checks for clashes
+  mpc_thr_hover: 0.50                   # ESTIMATE with THR_MDL_FAC=1 (quadratic thrust model); verify with A3
+  thr_mdl_fac: 1.0                      # ESTIMATE gz motor model gives thrust ~ command^2
+  inertia_scale_vs_x500: 0.0335         # ESTIMATE Ixx ratio mini2se / x500 (6.2e-4 / 0.0185) used to scale rate gains
+
+payload:
+  variant: red_led_beacon               # one of: red_led_beacon, tag, none (scenarios override)
+  variants:
+    red_led_beacon:
+      mass_kg: 0.018                    # SPEC (design doc)
+      offset_m: [0.0, 0.0, 0.064]       # SPEC sphere centre 35 mm above top shell (top shell at +29 mm)
+      diameter_m: 0.040                 # SPEC
+    tag:
+      mass_kg: 0.003                    # SPEC
+      offset_m: [-0.071, 0.0, 0.0]      # ESTIMATE on the rear face (body x = -69 mm) plus 2 mm plate
+      size_m: 0.08                      # SPEC
+    none:
+      mass_kg: 0.0                      # SPEC
+      offset_m: [0.0, 0.0, 0.0]         # SPEC
+
+station_keeping:
+  takeoff_alt_m: 1.2                    # SPEC
+  start_yaw_deg: 0.0                    # ESTIMATE (ENU) nose toward +x, so the rear face (tag) faces the camera at the origin
+  spawn_offset_m: [0.0, 0.0, 0.03]      # ESTIMATE spawn on the floor under the hover station (landing-gear clearance)
+  setpoint_rate_hz: 20.0                # ESTIMATE MAVSDK offboard rate
+  wander:
+    enabled: true                       # SPEC on by default
+    sigma_horizontal_m: 0.10            # SPEC 3 sigma = +-0.3 m (DJI vision hover)
+    sigma_vertical_m: 0.03              # SPEC 3 sigma = +-0.1 m
+    tau_s: 5.0                          # SPEC
+  slow_push:
+    distance_m: 0.5                     # SPEC (T6)
+    duration_s: 60.0                    # SPEC
+    axis: [0.0, 1.0, 0.0]               # ESTIMATE sideways = +y (image horizontal)
+  gnss_wander:                          # mission scenario only
+    sigma_horizontal_m: 0.5             # SPEC 3 sigma = +-1.5 m
+    sigma_vertical_m: 0.167             # SPEC 3 sigma = +-0.5 m
+    tau_s: 10.0                         # ESTIMATE
+
+mavsdk:
+  system_address: "udpin://0.0.0.0:14540"  # ESTIMATE PX4 SITL default offboard link

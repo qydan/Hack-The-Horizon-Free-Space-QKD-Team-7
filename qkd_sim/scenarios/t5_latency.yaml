@@ -1,0 +1,13 @@
+# T5 latency: fan low; capture, delivery and processing timestamps recorded (frames_meta.csv + telemetry).
+test: T5
+description: Fan low hover; records capture / delivery / processing timestamps.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: full
+seed: 505
+duration_s: 120
+drone: {enabled: true, wander: true}
+fan: {schedule: [{t_s: 0, level: low}]}
+lighting: {initial: office_50hz}

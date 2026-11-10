@@ -1,0 +1,27 @@
+# Desk fan local jet (section 7). Position and axis live in world.yaml.
+diameter_m: 0.40                        # MEASURE
+# The spec lists "off / low / high" and three outlet speeds (3.0 / 4.0 / 5.0 m/s). Interpreted as three running
+# levels plus off. Scenarios that say "low"/"high" use these keys. Flagged in the README.
+levels_mps:
+  "off": 0.0                            # SPEC
+  low: 3.0                              # MEASURE with a phone anemometer
+  medium: 4.0                           # MEASURE
+  high: 5.0                             # MEASURE
+
+jet:
+  potential_core_diameters: 3.0         # SPEC centreline u0 up to 3 D
+  decay: inverse                        # SPEC u0 * 3D / s beyond the core
+  half_width_base_fraction_of_d: 0.5    # SPEC half-width D/2 + 0.1 s
+  half_width_growth_per_m: 0.1          # SPEC
+  profile: gaussian_hwhm                # ESTIMATE half-width read as half-width at half maximum
+
+turbulence:
+  intensity: 0.15                       # ESTIMATE 15% of local speed, each axis
+  tau_s: 0.3                            # ESTIMATE
+
+force:
+  update_rate_hz: 100.0                 # SPEC ApplyLinkWrench persistent update rate
+  air_density_kgpm3: 1.2                # SPEC
+  # C_d*A for the drone comes from drone.yaml (aero.body_cd_area_m2); for the pendulum beacon:
+  pendulum_beacon_cd_area_m2: 0.00063   # ESTIMATE sphere Cd 0.5 * pi * 0.02^2
+  target_link: base_link                # link the wrench is applied to

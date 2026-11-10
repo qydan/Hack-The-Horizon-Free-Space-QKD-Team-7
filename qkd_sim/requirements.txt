@@ -1,0 +1,9 @@
+numpy>=1.26
+scipy>=1.11
+pyyaml>=6.0
+pyzmq>=25
+jsonschema>=4.20
+opencv-contrib-python-headless>=4.9
+mavsdk>=2.0,<4          # v4 is a different (native) API; sim_bridge uses the gRPC API
+pymavlink>=2.4.40
+pytest>=8.0

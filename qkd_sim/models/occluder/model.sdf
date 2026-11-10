@@ -1,0 +1,2 @@
+<?xml version='1.0'?>
+<sdf version='1.9'><model name='occluder'><static>true</static><pose>-3 2.5 -10 0 0 0</pose><link name='link'><visual name='visual'><pose>0 0 0 0 0 0</pose><geometry><box><size>0.01 0.1 0.18</size></box></geometry><material><ambient>0.75 0.55 0.45 1</ambient><diffuse>0.75 0.55 0.45 1</diffuse><specular>0.1 0.1 0.1 1</specular></material></visual></link></model></sdf>

@@ -1,0 +1,9 @@
+# [OPEN] Cyber sandbox configuration. Keys only; the team fills in values.
+mu: null
+eta_d: null
+p_dark: null
+e_opt: null
+theta_fov_virtual_mrad: null
+eta_geo_mode: null
+block_s: null
+abort_qber: null

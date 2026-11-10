@@ -1,0 +1,16 @@
+# Fallback: red beacon on a 1 m string at the hover station, in the fan jet (low then high).
+test: fallback
+description: Pendulum fallback rig in the fan jet.
+world: qkd_pendulum
+rigs: [rig_fixed, rig_gimbal]
+payload: none
+target: red_led
+fidelity: full
+seed: 901
+duration_s: 240
+drone: {enabled: false}
+fan:
+  schedule:
+    - {t_s: 0,   level: low}
+    - {t_s: 120, level: high}
+lighting: {initial: office_50hz}

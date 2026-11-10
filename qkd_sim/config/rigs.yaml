@@ -1,0 +1,32 @@
+# Ground-station rigs (section 8). Both share the camera model in camera_action5.yaml.
+default: rig_fixed
+
+rig_fixed:                              # Config A: tripod + ball head, no pan-tilt
+  model: mount_fixed
+  gimbal_io: FixedMount
+  lens_height_m: 1.00                   # MEASURE
+  # Nominal aim: at the hover station (3, 0, 1.2) from (0, 0, 1.0)
+  nominal_pan_deg: 0.0                  # ESTIMATE derived aim, yaw toward +x
+  nominal_tilt_deg: 3.81                # ESTIMATE derived atan(0.2 / 3.0), positive = up
+  nominal_roll_deg: 0.0                 # ESTIMATE
+  # Deliberate mount error for calibration to find (applied in the SDF, NOT reported by FixedMount.read()).
+  mount_error_deg: {yaw: 0.5, pitch: -0.3, roll: 0.4}       # ESTIMATE
+  principal_point_offset_px: [8.0, -5.0]                    # ESTIMATE (applied in GzAction5FrameSource)
+  coverage_check:
+    range_m: 3.0                        # SPEC
+    start_uncertainty_m: 1.0            # SPEC +-1 m -> needs ~37 deg horizontal
+
+rig_gimbal:                             # Config B: COTS 3-axis STorM32 gimbal
+  model: gimbal_storm32_3axis
+  gimbal_io: Storm32GimbalSim
+  lens_height_m: 1.00                   # MEASURE
+  initial_pan_deg: 0.0                  # ESTIMATE
+  initial_tilt_deg: 3.81                # ESTIMATE
+  # Same deliberate mount error idea, now camera-to-gimbal (tilt link) alignment.
+  mount_error_deg: {yaw: 0.5, pitch: -0.3, roll: 0.4}       # ESTIMATE
+  principal_point_offset_px: [8.0, -5.0]                    # ESTIMATE
+  joint_heights_m:                      # ESTIMATE pan axis at the tripod head, then roll, then tilt
+    pan_base: 0.86                      # ESTIMATE
+    roll_axis: 0.94                     # ESTIMATE
+    tilt_axis: 1.00                     # ESTIMATE equals lens height (camera balanced on the tilt axis)
+  optical_centre_to_tilt_axis_m: 0.006  # ESTIMATE within the 10 mm SPEC balance requirement

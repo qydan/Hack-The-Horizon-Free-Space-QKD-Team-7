@@ -1,0 +1,68 @@
+# DJI Osmo Action 5 Pro in webcam (UVC) mode (section 8.1).
+camera_id: action5pro
+
+body:
+  size_lwh_m: [0.0328, 0.0705, 0.0442]  # SPEC 70.5 x 44.2 x 32.8 mm (x = depth along the optical axis)
+  mass_kg: 0.146                        # SPEC
+sensor_spec:
+  format: 1/1.3-inch CMOS, 40 MP, Bayer colour   # SPEC
+  max_fov_deg: 155.0                    # SPEC
+  f_number: 2.8                         # SPEC
+  min_focus_m: 0.35                     # SPEC
+  ir_cut_filter: true                   # SPEC behaviour (team notes)
+  passband_nm: [400, 680]               # ESTIMATE visible band passed by the IR-cut filter
+
+stream:
+  width_px: 1920                        # MEASURE v4l2-ctl --list-formats-ext
+  height_px: 1080                       # MEASURE
+  fps: 30.0                             # MEASURE
+  pixel_format: MJPG                    # MEASURE
+
+lens:
+  projection: equidistant               # ESTIMATE fisheye model r = f * theta
+  hfov_deg: 140.0                       # ESTIMATE; MEASURE (155 is the max, the 16:9 crop may be narrower)
+  # f = (W/2) / (HFOV/2 in rad) = 786 px, IFOV ~1.27 mrad/px, VFOV ~79 deg. Derived in code, not stored, so
+  # it can never drift from hfov_deg / width_px.
+
+mount_lens_offset_m: [0.0, 0.0, 0.0]    # ESTIMATE optical centre relative to the camera link origin
+
+render:
+  # Gazebo sensor type. "wideanglecamera" renders a cube map and applies the equidistant lens on GPU.
+  # "rectilinear_remap" renders an ordinary camera and remaps to equidistant in GzAction5FrameSource.
+  sensor_type: wideanglecamera          # wideanglecamera | rectilinear_remap
+  rectilinear_hfov_deg: 120.0           # SPEC fallback; NOTE it cannot fill a 140 deg output (edges stay black)
+  rectilinear_width_px: 1920            # ESTIMATE
+  rectilinear_height_px: 1080           # ESTIMATE
+  env_texture_size_px: 1024             # ESTIMATE wide-angle cube-map face size
+  noise_stddev: 0.007                   # ESTIMATE Gaussian, in [0,1] units
+  clip_near_m: 0.05                     # ESTIMATE
+  clip_far_m: 500.0                     # ESTIMATE (mission world needs > 300 m)
+
+fidelity:
+  default: full                         # full | fast (scenarios override)
+
+rolling_shutter:
+  readout_s: 0.015                      # ESTIMATE; MEASURE (spinning line or fast LED)
+  bands: 5                              # ESTIMATE -> render sub-frames at bands / readout = 333 Hz
+
+exposure:
+  mode: auto                            # auto | locked (locked if the real camera allows it)
+  target_mean: 0.45                     # ESTIMATE mean brightness in [0,1]
+  tau_s: 0.5                            # ESTIMATE slow loop time constant
+  gain_min: 0.125                       # ESTIMATE
+  gain_max: 16.0                        # ESTIMATE
+  gain_initial: 1.0                     # ESTIMATE
+  locked_gain: 1.0                      # ESTIMATE used when mode == locked
+  gamma: 2.2                            # ESTIMATE gain applied in linear light, then re-encoded
+
+compression:
+  mjpg_quality: 80                      # ESTIMATE
+
+stabilisation: "off"                    # SPEC setting: RockSteady/HorizonSteady must be off on the real camera
+
+latency:
+  capture_to_frame_s: 0.150             # ESTIMATE; MEASURE in T5
+
+topics:
+  # Gazebo image topic of the camera sensor (relative names are expanded per world/model in frame_source.py)
+  image: /qkd/action5/image             # ESTIMATE explicit <topic> set in the model SDF

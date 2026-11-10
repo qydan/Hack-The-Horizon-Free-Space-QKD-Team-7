@@ -1,0 +1,79 @@
+# Lighting scenarios (section 9). lighting.py applies one via /world/<world>/light_config.
+default: office_50hz
+
+mains:
+  depth: 0.10                           # SPEC 10% flicker depth
+  update_rate_hz: 250.0                 # ESTIMATE spec asks 1000 (one per step); a light_config call takes ~0.4 ms and 4 panels x 1 kHz is out of reach. 250 Hz > 2 x 120 Hz flicker
+
+ceiling_panels:                         # used by office scenarios
+  positions_m: [[1.5, 0.0, 2.9], [4.0, 0.0, 2.9]]     # ESTIMATE 2 panels (not 4): each flicker update is a light_config call
+  diffuse: [0.9, 0.9, 0.85]             # ESTIMATE
+  intensity: 1.6                        # ESTIMATE (2 panels carry the light of 4)
+  attenuation_range_m: 8.0              # ESTIMATE
+  attenuation: {constant: 0.5, linear: 0.05, quadratic: 0.01}       # ESTIMATE
+  specular: [0.1, 0.1, 0.1]             # ESTIMATE
+
+ambient_fill:                           # two shadowless directional lights emulate ambient above the dark level
+  directions: [[0.05, 0.05, -1.0], [1.0, 0.1, -0.2]]               # ESTIMATE down, and from behind the camera
+
+spot_defaults:
+  range_m: 20.0                         # ESTIMATE
+  attenuation: {constant: 0.2, linear: 0.02, quadratic: 0.005}      # ESTIMATE
+  falloff: 1.0                          # ESTIMATE
+  specular: [0.5, 0.5, 0.5]             # ESTIMATE
+
+scenarios:
+  dark:
+    ambient: 0.02                       # SPEC
+    panels: "off"
+    flicker_hz: null
+  office_50hz:
+    ambient: 0.25                       # ESTIMATE
+    panels: "on"
+    flicker_hz: 100.0                   # SPEC 50 Hz mains -> 100 Hz, aliases to 10 Hz at 30 fps
+  office_60hz:
+    ambient: 0.25                       # ESTIMATE
+    panels: "on"
+    flicker_hz: 120.0                   # SPEC 60 Hz mains -> 120 Hz, aliases to 0 Hz
+  bright_lamp:
+    ambient: 0.25                       # ESTIMATE
+    panels: "on"
+    flicker_hz: null
+    spot:
+      position_m: [3.0, 0.5, 1.3]       # ESTIMATE beside the drone, aimed at the camera
+      aim_at_m: [0.0, 0.0, 1.0]         # ESTIMATE
+      diffuse: [1.0, 1.0, 0.95]         # ESTIMATE
+      intensity: 8.0                    # ESTIMATE washout
+      outer_angle_deg: 30.0             # ESTIMATE
+      inner_angle_deg: 15.0             # ESTIMATE
+  window:
+    ambient: 0.25                       # ESTIMATE
+    panels: "on"
+    flicker_hz: null
+    sun:
+      direction: [-0.6, 0.2, -0.4]      # ESTIMATE through the back-wall window toward the camera
+      diffuse: [1.0, 0.97, 0.9]         # ESTIMATE
+      intensity: 3.0                    # ESTIMATE
+    window_plane:
+      centre_m: [6.45, 0.0, 1.6]        # ESTIMATE in the back wall (x = 6.5)
+      size_m: [2.0, 1.2]                # ESTIMATE (width y, height z)
+      emissive: [1.0, 1.0, 0.95]        # ESTIMATE large bright area in the 140 deg view
+  distractors:
+    ambient: 0.25                       # ESTIMATE
+    panels: "on"
+    flicker_hz: 100.0                   # SPEC
+    distractor_set: true                # spawns models/distractors
+
+distractors:
+  steady_red_lamp:
+    position_m: [3.6, 0.9, 1.0]         # ESTIMATE
+    emissive_rgb: [1.0, 0.05, 0.02]     # ESTIMATE
+    diameter_m: 0.06                    # ESTIMATE
+  blinking_red_indicator:
+    position_m: [2.6, -0.7, 0.9]        # ESTIMATE
+    emissive_rgb: [1.0, 0.02, 0.0]      # ESTIMATE
+    diameter_m: 0.01                    # ESTIMATE
+    blink_hz: 2.0                       # SPEC 1-3 Hz
+  glints:
+    - {position_m: [3.3, 0.4, 0.8], size_m: [0.03, 0.03], emissive: [1.0, 0.95, 0.9]}    # ESTIMATE
+    - {position_m: [2.8, -0.3, 1.5], size_m: [0.02, 0.04], emissive: [1.0, 1.0, 1.0]}    # ESTIMATE

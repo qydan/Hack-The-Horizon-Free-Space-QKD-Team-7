@@ -1,0 +1,14 @@
+# T2 acquisition: 20 trials, drone station randomised within +-1 m, tracker restarted in SEARCH each trial.
+test: T2
+description: 20 acquisition trials with the hover station randomised within +-1 m.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: full
+seed: 202
+duration_s: 640
+trials: {count: 20, duration_s: 30}
+drone: {enabled: true, wander: true, randomise_station_m: 1.0}
+fan: {schedule: [{t_s: 0, level: low}]}
+lighting: {initial: office_50hz}
