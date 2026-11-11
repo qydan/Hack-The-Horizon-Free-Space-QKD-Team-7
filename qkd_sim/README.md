@@ -267,6 +267,12 @@ against the Action 5 Pro emulation and the STorM32, and they must stay self-cont
 - **Residual floor.** The camera's 150 ms latency is ~2.5× `src/`'s. Even with a velocity lead, the residual floor
   in calm hover is about 3 mrad (virtual receiver) and 4 mrad (gimbal), against the 10 mrad virtual receiver
   half-width.
+- **Fast motion (`tracking_sweep`).** Measurement holds at about 0.6 mrad up to 2 m/s offline. In Gazebo, TRACK
+  fell to about 74% above 0.45 m/s, but 25 of the 26 lock losses were gate aborts: the I8 re-acquire command, not
+  a lost LED. Above about 1 m/s the residual (20–75 mrad) exceeds the receiver width, so the gate aborts
+  correctly; with 150 ms of camera latency, no predictor follows a sine. Re-acquiring after an abort now re-checks
+  the known spot in about 0.13 s (it took 0.65 s before), and the virtual receiver leads its own servo lag
+  (residual at 0.45 m/s: 7.2 → 4.6 mrad).
 - **Take-off and the reference.** The drone takes off at t = 0 and the tracker locks while it is still on the
   floor. In Gazebo t5, a boresight taken during the climb read as 100–180 mrad of drift. The error budget saw
   the beam pointing about 8° away, and the gate aborted 37 of 44 blocks. The boresight is now fixed only on a
