@@ -11,7 +11,7 @@ Short names: any unique scenario prefix ("t3" -> t3_turbulence); rigs "fixed"/"A
 
 Everything runs on Gazebo sim time. Outputs go to runs/<scenario>_<rig>_<timestamp>/:
   world.sdf, scenario.yaml, camera_truth.yaml (copy, evaluation only), summary.json,
-  telemetry.jsonl/.csv (I2), abort/keys/eve/photodiode.jsonl, frames_meta.csv, sim_events.jsonl,
+  telemetry.jsonl/.csv (I2), abort/keys/eve.jsonl, frames_meta.csv, sim_events.jsonl,
   truth.jsonl/.csv (evaluation only), sample frames (frame_*.png), logs/*.log.
 
 Environment:
@@ -129,6 +129,7 @@ class ScenarioRun:
         self.info: dict[str, Any] = {}
         self.frame_callback = None          # tests: called as cb(frame, world) for every delivered frame
         self.viewer = None                  # --view: MJPEG server
+        self.accuracy = None                # --view with tracking: tracker-vs-truth overlay
 
     # ------------------------------------------------------------------------------------------- setup
     def build(self) -> Path:
@@ -223,7 +224,16 @@ class ScenarioRun:
         for model, vis, tgt in targets:
             if model in beacon_event_models:
                 continue
-            mod = BeaconModulator(world, model, cfgs["beacon"], visual_name=vis, target=tgt)
+            geom = None
+            if model == cfgs["drone"]["model_name"] and tgt == "red_led":
+                from sim_bridge.truth_publisher import camera_rotation, lens_position, tx_axis_body
+                rig_cfg = cfgs["rigs"][self.rig]
+                lens0 = lens_position(self.rig, rig_cfg, camera_rotation(self.rig, rig_cfg, None))
+                off = cfgs["drone"]["payload"]["variants"]["red_led_beacon"]["offset_m"]
+                geom = {"pose_fn": (lambda m=model: world.pose(m)), "led_offset_body": off, "camera_pos": lens0,
+                        "led_axis_body": tx_axis_body(self.info["station"], off, lens0,
+                                                      float(cfgs["drone"]["station_keeping"]["start_yaw_deg"]) * DEG)}
+            mod = BeaconModulator(world, model, cfgs["beacon"], visual_name=vis, target=tgt, beam_geometry=geom)
             try:
                 methods[model] = mod.select_method()
                 self.thread(f"beacon:{model}", mod.run, until=until, stop=stop)
@@ -237,7 +247,10 @@ class ScenarioRun:
         # fan -------------------------------------------------------------------------------------------
         self.fan = None
         fan_sched = [{"t_s": self.t0 + float(i["t_s"]), "level": i["level"]} for i in scn["fan"]["schedule"]]
-        if drone_on:
+        self.flight = None
+        if drone_on and cfgs["drone"].get("flight_model", "px4") == "simple":
+            pass                     # the simple flight model computes the fan wind itself (start_drone)
+        elif drone_on:
             self.fan = FanWindBridge(world, cfgs, model=cfgs["drone"]["model_name"], link=cfgs["fan"]["force"]["target_link"],
                                      cd_area=cfgs["drone"]["aero"]["body_cd_area_m2"], schedule=fan_sched, seed=seed + 1)
         elif "pendulum_rig" in self.info["models"]:
@@ -277,16 +290,17 @@ class ScenarioRun:
         # truth -----------------------------------------------------------------------------------------
         from sim_bridge.truth_publisher import TruthPublisher
         pose_fn, offset = self._target_pose_fn()
-        wind = (lambda: self.fan.last_wind.tolist()) if self.fan is not None else (lambda: [0.0, 0.0, 0.0])
-        level = (lambda: self.fan.level) if self.fan is not None else (lambda: "off")
+        def wind():
+            src = self.flight or self.fan
+            return src.last_wind.tolist() if src is not None else [0.0, 0.0, 0.0]
+
+        def level():
+            src = self.flight or self.fan
+            return src.level if src is not None else "off"
         self.truth = TruthPublisher(world, cfgs, rig=self.rig, pose_fn=pose_fn, payload_offset=offset, wind_fn=wind,
                                     fan_level_fn=level, lighting_fn=lambda: self.lighting.current or scn["lighting"]["initial"],
                                     station=self.info.get("station"))
         self.thread("truth", self.truth.run, until=until, stop=stop)
-
-        # photodiode (optional) ---------------------------------------------------------------------------
-        if scn["photodiode"].get("enabled") or cfgs["photodiode"].get("enabled"):
-            self._start_photodiode(world, pose_fn, offset, until, stop, seed + 3)
 
     def _target_pose_fn(self):
         cfgs, scn = self.cfgs, self.scn
@@ -386,36 +400,12 @@ class ScenarioRun:
                     self.gimbal.dyn.set_active(bool(item["active"]))
             self._event({"t_sim": self.world.sim_time, "event": f"gimbal_{item['kind']}", **item})
 
-    def _start_photodiode(self, world, pose_fn, offset, until, stop, seed) -> None:  # pragma: no cover
-        from sim_bridge.photodiode_sim import PhotodiodeSensor
-        from sim_bridge.truth_publisher import camera_rotation, lens_position, quat_to_rot
-        cfgs = self.cfgs
-        pd = cfgs["photodiode"]
-
-        def rx():
-            joints = self.truth._joints if self.rig == "rig_gimbal" else None
-            R = camera_rotation(self.rig, cfgs["rigs"][self.rig], joints)
-            return lens_position(self.rig, cfgs["rigs"][self.rig], R) + R @ np.asarray(pd["receiver"]["mount_offset_m"]), R[:, 0]
-
-        def tx():
-            rec = pose_fn()
-            if rec is None:
-                return None
-            R = quat_to_rot(rec.orientation_wxyz)
-            return np.asarray(rec.position) + R @ np.asarray(offset), R @ self.truth.tx_axis_b
-
-        sensor = PhotodiodeSensor(world, cfgs, rig=self.rig, seed=seed,
-                                  lighting_name=lambda: self.lighting.current or self.scn["lighting"]["initial"],
-                                  receiver_pose_fn=rx, tx_pose_fn=tx)
-        self.photodiode = sensor
-        self.thread("photodiode", sensor.run, until=until, stop=stop)
-
     def _event(self, rec: dict[str, Any]) -> None:
         with self._events_lock:
             self.events.send_multipart([b"sim_events", json.dumps(rec, default=str).encode()])
 
     # ------------------------------------------------------------------------------------------- drone
-    def start_drone(self) -> None:  # pragma: no cover - needs PX4
+    def start_drone(self) -> None:  # pragma: no cover - needs Gazebo
         from sim_bridge.hover_station import run_station
         scn, cfgs = self.scn, self.cfgs
         d = scn["drone"]
@@ -433,6 +423,20 @@ class ScenarioRun:
         self.trial_schedule = schedule
         push = None if d.get("slow_push_at_s") is None else self.t0 + float(d["slow_push_at_s"])
 
+        if cfgs["drone"].get("flight_model", "px4") == "simple":
+            from sim_bridge.simple_flight import SimpleFlight
+            fan_sched = [{"t_s": float(i["t_s"]), "level": i["level"]} for i in scn["fan"]["schedule"]]
+            self.flight = SimpleFlight(cfgs["drone"], cfgs["fan"], cfgs["world"], np.asarray(self.info["spawn"], float),
+                                       np.asarray(station, float), fan_schedule=fan_sched, seed=int(scn["seed"]) + 11,
+                                       wander=bool(d.get("wander", True)), push_start_s=push,
+                                       gnss=bool(d.get("gnss_wander")), station_schedule=schedule,
+                                       path=d.get("path"))
+            self.summary["flight_model"] = "simple"
+            self.thread("simple_flight", self.flight.run, self.world, cfgs["drone"]["model_name"],
+                        until=self.t0 + self.duration, stop=self.stop_evt.is_set)
+            return
+        self.summary["flight_model"] = "px4"
+
         def go():
             asyncio.run(run_station(cfgs["drone"], {**cfgs["world"], "world_name": self.info["world_name"]},
                                     station=station, duration_s=self.duration, wander=bool(d.get("wander", True)),
@@ -445,16 +449,36 @@ class ScenarioRun:
     def start_open_blocks(self) -> None:
         env = self.env()
         py = sys.executable
-        self.tracking_on = not is_open_stub(ROOT / "tracking" / "main.py", "run")
+        self.tracking_on = (not is_open_stub(ROOT / "tracking" / "main.py", "run")
+                            and not getattr(self.args, "no_tracking", False))
         self.sandbox_on = not is_open_stub(ROOT / "sandbox" / "main.py", "run")
         self.summary["tracking"] = "running" if self.tracking_on else "OPEN placeholder (not started)"
         self.summary["sandbox"] = "running" if self.sandbox_on else "OPEN placeholder (started under port_guard only)"
         if self.tracking_on:
-            self.procs.append(Proc("tracking", [py, "-m", "tracking.main", "--rig", self.rig], self.out / "logs", env))
+            self.procs.append(Proc("tracking", [py, "-m", "tracking.main", "--rig", self.rig,
+                                                "--target", self.scn["target"]], self.out / "logs", env))
         allow = [str(p) for p in self.cfgs["bus"]["allow_list"]["sandbox"]]
         self.port_log = self.out / "sandbox_ports.jsonl"
+        sb_args = ["--log", str(self.out / "sandbox_log.jsonl")] if self.sandbox_on else []
         self.procs.append(Proc("sandbox", [py, "-m", "tools.port_guard", "--allow", *allow, "--log", str(self.port_log),
-                                           "sandbox.main"], self.out / "logs", env))
+                                           "sandbox.main", *sb_args], self.out / "logs", env))
+        if self.sandbox_on and self.scn["eve"]["schedule"]:
+            self.thread("eve_schedule", self._eve_schedule, self.t0 + self.duration)
+
+    def _eve_schedule(self, until) -> None:  # pragma: no cover - needs Gazebo
+        """Plays the scenario's Eve toggles on port 5560 at their sim times (the operator UI's role)."""
+        from telemetry.bus import Publisher
+        self.eve_pub = Publisher("eve", validate=False)
+        for item in sorted(self.scn["eve"]["schedule"], key=lambda d: float(d["t_s"])):
+            t_ev = self.t0 + float(item["t_s"])
+            if t_ev > until or self.stop_evt.is_set():
+                return
+            self.world.wait_until(t_ev, timeout_wall_s=600)
+            msg = {"mode": item["mode"], **({"fraction": float(item["fraction"])} if "fraction" in item else {})}
+            for _ in range(3):                  # PUB/SUB: repeat so a just-(re)connected sandbox sees it
+                self.eve_pub.send(msg)
+                time.sleep(0.05)
+            self._event({"t_sim": self.world.sim_time, "event": "eve", **msg, "t_scheduled": t_ev})
 
     def start_recorders(self) -> None:
         from evaluation.truth_recorder import TruthRecorder
@@ -490,7 +514,11 @@ class ScenarioRun:
                 if self.frame_callback is not None:
                     self.frame_callback(fr, self.world)
                 if self.viewer is not None:
-                    self.viewer.update(fr.image, self._overlay(fr))
+                    if self.accuracy is not None:
+                        for img, extra in self.accuracy.push(fr):
+                            self.viewer.update(img, self._overlay(fr) + extra, force=True)
+                    else:
+                        self.viewer.update(fr.image, self._overlay(fr))
                 if not record:
                     continue
                 if last is not None:
@@ -506,8 +534,11 @@ class ScenarioRun:
         lines = [f"{self.scn['name']}  {self.rig}  {self.fidelity}   t = {t:6.2f} / {self.duration:.0f} s   frame {fr.seq}",
                  f"latency {1e3 * (fr.t_delivered_sim - fr.t_capture_sim):.0f} ms   RTF {self.world.real_time_factor:.2f}"]
         extra = []
-        if getattr(self, "fan", None) is not None:
-            extra.append(f"fan {self.fan.level}")
+        src = getattr(self, "flight", None) or getattr(self, "fan", None)
+        if src is not None:
+            extra.append(f"fan {src.level}")
+        if getattr(self, "flight", None) is not None:
+            extra.append(f"lean {self.flight.lean_deg():.1f} deg")
         if getattr(self, "lighting", None) is not None and self.lighting.current:
             extra.append(f"light {self.lighting.current}")
         if getattr(self, "gimbal", None) is not None:
@@ -516,6 +547,12 @@ class ScenarioRun:
         if extra:
             lines.append("   ".join(extra))
         return lines
+
+    def start_accuracy_overlay(self) -> None:
+        """Tracker-vs-truth markers in the live view (evaluation side: uses truth)."""
+        from tools.accuracy_overlay import AccuracyOverlay, TelemetryTap
+        self.telemetry_tap = TelemetryTap(self.cfgs["bus"])
+        self.accuracy = AccuracyOverlay(self.cfgs, self.rig, self.truth.history, self.telemetry_tap)
 
     def start_viewer(self) -> None:
         from tools.mjpeg_server import MjpegServer
@@ -540,7 +577,8 @@ class ScenarioRun:
             self.t0 = probe.sim_time
             self.start_bridges()
             if "spawn" in self.info:
-                self.start_px4()
+                if self.cfgs["drone"].get("flight_model", "px4") == "px4":
+                    self.start_px4()
                 self.start_drone()
             if getattr(self.args, "view", None):
                 self.start_viewer()
@@ -548,6 +586,7 @@ class ScenarioRun:
             if not self.tracking_on:
                 self.start_frame_pump()
             elif self.viewer is not None:
+                self.start_accuracy_overlay()
                 self.start_frame_pump(record=False)
             t_wall0 = time.monotonic()
             until = self.t0 + self.duration
@@ -565,7 +604,8 @@ class ScenarioRun:
                         k = len(self.summary.setdefault("tracker_restarts", []))
                         self.summary["tracker_restarts"].append(self.world.sim_time)
                         self.procs.append(Proc(f"tracking_{k + 1}", [sys.executable, "-m", "tracking.main", "--rig",
-                                                                     self.rig], self.out / "logs", self.env()))
+                                                                     self.rig, "--target", self.scn["target"]],
+                                               self.out / "logs", self.env()))
                 if not self.procs[0].alive():
                     raise RuntimeError("Gazebo exited early; see logs/gazebo.log")
                 if time.monotonic() - last_print > 5.0:
@@ -590,12 +630,14 @@ class ScenarioRun:
             self.gimbal.stop()
         if self.viewer is not None:
             self.viewer.stop()
+        if getattr(self, "telemetry_tap", None) is not None:
+            self.telemetry_tap.close()
         # release every bound port so the next run in this process can bind again
         socks = [getattr(getattr(self, "truth", None), "sock", None), getattr(self, "events", None),
                  getattr(getattr(self, "gimbal_server", None), "pub", None),
                  getattr(getattr(self, "gimbal_server", None), "sub", None),
                  getattr(getattr(self, "frame_source", None), "_meta_sock", None),
-                 getattr(getattr(self, "photodiode", None), "sock", None)]
+                 getattr(getattr(self, "eve_pub", None), "sock", None)]
         for sock in socks:
             if sock is not None:
                 sock.close(linger=0)
@@ -610,6 +652,8 @@ class ScenarioRun:
             (self.out / "lighting_rate.txt").write_text(f"{self.lighting.achieved_rate_hz}\n")
         if hasattr(self, "truth"):
             s["truth_records"] = self.truth.records
+        if getattr(self, "flight", None) is not None and self.flight.path:
+            s["path_segments"] = self.flight.path_windows()
         if hasattr(self, "port_log") and self.port_log.exists():
             evs = [json.loads(line) for line in self.port_log.read_text().splitlines() if line.strip()]
             s["sandbox_port_violations"] = [e for e in evs if not e["allowed"]]
@@ -630,7 +674,7 @@ def run(scenario: str, rig: str, *, duration: float | None = None, fidelity: str
         scn = _merge(scn, patch)
         validate(scn, cfgmod.load_all(scn.get("overrides")))
     ns = argparse.Namespace(fidelity=fidelity, duration=duration, out=str(out) if out else None, gui=gui,
-                            build_only=False, view=None)
+                            build_only=False, view=None, no_tracking=False)
     r = ScenarioRun(scn, rig, ns)
     r.frame_callback = frame_callback
     summary = r.run()
@@ -649,6 +693,8 @@ def main() -> None:
     ap.add_argument("--build-only", action="store_true", help="only write world.sdf and scenario.yaml")
     ap.add_argument("--view", nargs="?", const=8080, default=None, type=int, metavar="PORT",
                     help="serve the live camera at http://localhost:PORT (default 8080)")
+    ap.add_argument("--no-tracking", action="store_true",
+                    help="don't start tracking.main even if it is implemented (faster sim, camera view only)")
     ap.add_argument("--quick", action="store_true", help="20 s of sim time at fast fidelity (unless overridden)")
     ap.add_argument("--list", action="store_true")
     args = ap.parse_args()

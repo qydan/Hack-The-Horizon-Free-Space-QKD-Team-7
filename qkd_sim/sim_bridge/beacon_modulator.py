@@ -1,4 +1,7 @@
-"""7 Hz square-wave beacon modulation (100% / 40%, never off), locked to Gazebo sim time (section 6.1).
+"""Bare red LED driver, locked to Gazebo sim time (section 6.1). Steady by default (constantly lit, as on the
+real rig); ``beacon.yaml: red_led.modulation.enabled: true`` switches to the 7 Hz square wave (100% / 40%, never
+off). Either way the level is multiplied by the LED's beam pattern as the drone's attitude turns it away from
+the camera.
 
 Implementation methods, tried in the order listed in ``beacon.yaml: red_led.methods``:
   1. ``visual_config``: runtime material change through the /world/<w>/visual_config user-command service.
@@ -60,6 +63,34 @@ class Modulation:
         return start + 2 * period
 
 
+@dataclass(frozen=True)
+class BeamPattern:
+    """Bare LED radiation pattern I(theta) = cos(theta)^m, I = 0.5 at the half-intensity angle, 0 behind."""
+    half_angle_rad: float
+
+    @property
+    def exponent(self) -> float:
+        return math.log(0.5) / math.log(math.cos(self.half_angle_rad))
+
+    def factor(self, off_axis_rad: float) -> float:
+        if off_axis_rad >= math.pi / 2:
+            return 0.0
+        return max(0.0, math.cos(off_axis_rad)) ** self.exponent
+
+
+def off_axis_angle(body_pos, body_quat_wxyz, led_offset_body, led_axis_body, camera_pos) -> float:
+    """Angle between the LED axis (body frame) and the LED -> camera direction, with the body's current attitude."""
+    import numpy as np
+
+    from sim_bridge.truth_publisher import quat_to_rot
+    R = quat_to_rot(body_quat_wxyz)
+    led = np.asarray(body_pos, float) + R @ np.asarray(led_offset_body, float)
+    to_cam = np.asarray(camera_pos, float) - led
+    axis = R @ np.asarray(led_axis_body, float)
+    c = float(axis @ to_cam / (np.linalg.norm(axis) * np.linalg.norm(to_cam)))
+    return math.acos(max(-1.0, min(1.0, c)))
+
+
 def emissive_for_level(rgb_full, level: float) -> tuple[float, float, float, float]:
     r, g, b = rgb_full
     return (r * level, g * level, b * level, 1.0)
@@ -71,7 +102,9 @@ class BeaconModulator:
     SHELL_HIDE_M = -0.045       # slider position that pulls a sphere fully inside the shell
 
     def __init__(self, world, model_name: str, cfg_beacon: dict[str, Any], *, visual_name: str = "led_visual",
-                 target: str = "red_led", refresh_s: float = 0.5):
+                 target: str = "red_led", refresh_s: float = 0.5, beam_geometry: dict[str, Any] | None = None):
+        """``beam_geometry`` (drone only): {"pose_fn", "led_offset_body", "led_axis_body", "camera_pos"}. With it,
+        the LED is dimmed by its beam pattern as the drone's attitude turns the LED away from the camera."""
         self.world = world
         self.model = model_name
         self.target = target
@@ -88,6 +121,11 @@ class BeaconModulator:
             self.methods = ["visual_config"]
         self.visual_name = visual_name
         self.refresh_s = refresh_s
+        self.geom = beam_geometry if target == "red_led" else None
+        led = cfg_beacon["red_led"]
+        self.beam = BeamPattern(math.radians(float(led["viewing_half_angle_deg"])))
+        self.beam_period = 1.0 / float(led["beam_update_rate_hz"])
+        self._last_sent: float | None = None
         self.method: str | None = None
         self._visual_id: int | None = None
         self.edges_sent = 0
@@ -122,20 +160,40 @@ class BeaconModulator:
         self.edges_sent += 1
 
     # -------------------------------------------------------------------- run
+    def beam_factor(self) -> float:
+        if self.geom is None:
+            return 1.0
+        rec = self.geom["pose_fn"]()
+        if rec is None:
+            return 1.0
+        return self.beam.factor(off_axis_angle(rec.position, rec.orientation_wxyz, self.geom["led_offset_body"],
+                                               self.geom["led_axis_body"], self.geom["camera_pos"]))
+
+    def _send(self, t: float, force: bool) -> None:
+        level = self.mod.level(t) * self.beam_factor()
+        if force or self._last_sent is None or abs(level - self._last_sent) > 0.01 * max(self._last_sent, 1e-3):
+            self.apply(level)
+            self._last_sent = level
+
     def run(self, until: float | None = None, stop=lambda: False) -> None:
         if self.method is None:
             self.select_method()
         t = self.world.sim_time
-        self.apply(self.mod.level(t))
-        last_sent = t
+        self._send(t, force=True)
+        last_refresh = t
         while not stop():
-            t_edge = min(self.mod.next_edge(t), last_sent + self.refresh_s)
-            if until is not None and t_edge > until:
+            t_edge = self.mod.next_edge(t)
+            t_next = min(t_edge, last_refresh + self.refresh_s)
+            if self.geom is not None:
+                t_next = min(t_next, t + self.beam_period)
+            if until is not None and t_next > until:
                 return
-            self.world.wait_until(t_edge)
+            self.world.wait_until(t_next)
             t = self.world.sim_time
-            self.apply(self.mod.level(t))
-            last_sent = t
+            refresh = t >= last_refresh + self.refresh_s
+            self._send(t, force=refresh or t >= t_edge)
+            if refresh:
+                last_refresh = t
 
 
 def main() -> None:  # pragma: no cover - needs Gazebo

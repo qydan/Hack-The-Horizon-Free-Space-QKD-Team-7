@@ -24,7 +24,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from sim_bridge import config as cfgmod  # noqa: E402
-from sim_bridge.camera_model import EquidistantLens, rot_zyx  # noqa: E402
+from sim_bridge.camera_model import make_lens, render_sensor_type, rot_zyx  # noqa: E402
 from sim_bridge.image_pipeline import Action5Pipeline  # noqa: E402
 from sim_bridge.truth_publisher import rot_to_ypr  # noqa: E402
 from tools.compute_inertia import inertia, rotor_positions  # noqa: E402
@@ -107,7 +107,13 @@ def camera_sensor_sdf(cam: dict[str, Any], fidelity: str) -> str:
     rate = Action5Pipeline.required_render_rate_hz(cam, fidelity)
     noise = (f"<noise><type>gaussian</type><mean>0</mean><stddev>{f(r['noise_stddev'])}</stddev></noise>")
     clip = f"<clip><near>{f(r['clip_near_m'])}</near><far>{f(r['clip_far_m'])}</far></clip>"
-    if r["sensor_type"] == "wideanglecamera":
+    st = render_sensor_type(cam)
+    if st == "camera":                       # rectilinear (pinhole) lens: one ordinary render per frame
+        w, h = cam["stream"]["width_px"], cam["stream"]["height_px"]
+        body = (f"<horizontal_fov>{f(float(cam['lens']['hfov_deg']) * DEG)}</horizontal_fov>"
+                f"<image><width>{w}</width><height>{h}</height><format>R8G8B8</format></image>{clip}{noise}")
+        stype = "camera"
+    elif st == "wideanglecamera":
         w, h = cam["stream"]["width_px"], cam["stream"]["height_px"]
         hfov = float(cam["lens"]["hfov_deg"]) * DEG
         body = (f"<horizontal_fov>{f(hfov)}</horizontal_fov>"
@@ -116,13 +122,13 @@ def camera_sensor_sdf(cam: dict[str, Any], fidelity: str) -> str:
                 f"<cutoff_angle>{f(math.pi / 2)}</cutoff_angle>"
                 f"<env_texture_size>{int(r['env_texture_size_px'])}</env_texture_size></lens>")
         stype = "wideanglecamera"
-    elif r["sensor_type"] == "rectilinear_remap":
+    elif st == "rectilinear_remap":
         body = (f"<horizontal_fov>{f(float(r['rectilinear_hfov_deg']) * DEG)}</horizontal_fov>"
                 f"<image><width>{int(r['rectilinear_width_px'])}</width><height>{int(r['rectilinear_height_px'])}"
                 f"</height><format>R8G8B8</format></image>{clip}{noise}")
         stype = "camera"
     else:
-        raise ValueError(f"unknown render.sensor_type {r['sensor_type']!r}")
+        raise ValueError(f"unknown render.sensor_type {st!r}")
     return (f"<sensor name='action5_camera' type='{stype}'><always_on>true</always_on>"
             f"<update_rate>{f(rate)}</update_rate><visualize>false</visualize>"
             f"<topic>{cam['topics']['image']}</topic><camera name='action5'>{body}</camera></sensor>")
@@ -279,10 +285,11 @@ def payload_visuals(cfgs, payload: str, target_scale: float = 1.0, beacon_method
     off = pv["offset_m"]
     top = 0.5 * float(cfgs["drone"]["spec"]["folded_lwh_m"][2])       # top shell height above body centre
     if payload == "red_led_beacon":
-        r = 0.5 * float(b["red_led"]["diffuser_diameter_m"]) * target_scale
+        r = 0.5 * float(b["red_led"]["render_diameter_m"]) * target_scale
         em = b["red_led"]["emissive_rgb_full"]
-        mount = visual("beacon_post", cyl_geom(0.004, off[2] - top), material((0.9, 0.9, 0.9)),
-                       xyz=(off[0], off[1], top + (off[2] - top) / 2))
+        post = max(off[2] - top - r, 0.001)
+        mount = visual("beacon_post", cyl_geom(0.0015, post), material((0.15, 0.15, 0.15)),
+                       xyz=(off[0], off[1], top + post / 2))
         if beacon_method != "shell_toggle":
             return (mount + visual("led_visual", sph_geom(r), material(b["red_led"]["diffuse_rgb"], emissive=em),
                                    xyz=off, cast_shadows=False), "", "")
@@ -333,15 +340,21 @@ def drone_model(cfgs, payload: str, spawn_xyz, *, yaw_enu_deg: float, target_sca
         vis += visual(f"arm_{k}", box_geom((arm_len, 0.012, 0.01)), material((0.5, 0.52, 0.55)),
                       xyz=(x / 2, y / 2, 0.0), rpy=(0, 0, math.atan2(y, x)))
         vis += visual(f"motor_{k}", cyl_geom(0.009, 0.016), material((0.15, 0.15, 0.15)), xyz=(x, y, z - 0.008))
-    base = (f"<link name='base_link'>{inertial(inr['mass_kg'], I[0][0], I[1][1], I[2][2], I[0][1], I[0][2], I[1][2], xyz=inr['com_m'])}"
-            f"{collision('base_collision', box_geom((L, W, H)))}{vis}{pv}{PX4_SENSORS}</link>")
+    px4 = d.get("flight_model", "px4") == "px4"
+    # simple flight model: the pose is written by sim_bridge/simple_flight.py, so no gravity, sensors or motors
+    nograv = "" if px4 else "<gravity>false</gravity>"
+    base = (f"<link name='base_link'>{nograv}{inertial(inr['mass_kg'], I[0][0], I[1][1], I[2][2], I[0][1], I[0][2], I[1][2], xyz=inr['com_m'])}"
+            f"{collision('base_collision', box_geom((L, W, H)))}{vis}{pv}{PX4_SENSORS if px4 else ''}</link>")
     links, joints, plugins = "", "", ""
     mr = float(g["rotor_link_mass_kg"])
     for k, (x, y, z) in enumerate(rotors):
-        links += (f"<link name='rotor_{k}'>{pose((x, y, z))}"
+        links += (f"<link name='rotor_{k}'>{pose((x, y, z))}{nograv}"
                   f"{inertial(mr, mr * prop_r ** 2 / 12, mr * prop_r ** 2 / 12, mr * prop_r ** 2 / 6)}"
                   f"{visual('prop', cyl_geom(prop_r, g['prop_visual_thickness_m']), material((0.85, 0.85, 0.85)), cast_shadows=False)}"
                   f"</link>")
+        if not px4:
+            joints += (f"<joint name='rotor_{k}_joint' type='fixed'><parent>base_link</parent><child>rotor_{k}</child></joint>")
+            continue
         joints += (f"<joint name='rotor_{k}_joint' type='revolute'><parent>base_link</parent><child>rotor_{k}</child>"
                    f"<axis><xyz>0 0 1</xyz><limit><lower>-1e16</lower><upper>1e16</upper></limit></axis></joint>")
         plugins += (f"<plugin filename='gz-sim-multicopter-motor-model-system' name='gz::sim::systems::MulticopterMotorModel'>"
@@ -357,8 +370,9 @@ def drone_model(cfgs, payload: str, spawn_xyz, *, yaw_enu_deg: float, target_sca
                     f"<rollingMomentCoefficient>{f(mot['rolling_moment_coefficient'])}</rollingMomentCoefficient>"
                     f"<rotorVelocitySlowdownSim>{int(mot['rotor_velocity_slowdown_sim'])}</rotorVelocitySlowdownSim>"
                     f"<motorType>velocity</motorType></plugin>")
-    plugins += ("<plugin filename='gz-sim-odometry-publisher-system' name='gz::sim::systems::OdometryPublisher'>"
-                "<dimensions>3</dimensions></plugin>")
+    if px4:
+        plugins += ("<plugin filename='gz-sim-odometry-publisher-system' name='gz::sim::systems::OdometryPublisher'>"
+                    "<dimensions>3</dimensions></plugin>")
     return (f"<model name='{name}'>{pose(spawn_xyz, (0, 0, yaw_enu_deg * DEG))}<self_collide>false</self_collide>"
             f"{base}{links}{plinks}{joints}{pjoints}{plugins}</model>")
 
@@ -366,7 +380,7 @@ def drone_model(cfgs, payload: str, spawn_xyz, *, yaw_enu_deg: float, target_sca
 # ------------------------------------------------------------------------------------------------- props
 def beacon_on_stand(cfgs, name: str, xyz, scale: float = 1.0) -> str:
     b = cfgs["beacon"]["red_led"]
-    r = 0.5 * float(b["diffuser_diameter_m"]) * scale
+    r = 0.5 * float(b["render_diameter_m"]) * scale
     pole = cfgs["world"]["props"]["stand"]["pole_diameter_m"]
     z = float(xyz[2])
     links = (f"<link name='link'>"
@@ -397,12 +411,13 @@ def fan_model(cfgs) -> str:
     wf = cfgs["world"]["fan"]
     D = float(cfgs["fan"]["diameter_m"])
     fv = cfgs["world"]["props"]["desk_fan_visual"]
+    ap = cfgs["world"]["appearance"]
     x, y, z = wf["position_m"]
     links = (f"<link name='link'>"
-             f"{visual('head', cyl_geom(D / 2, fv['head_depth_m']), material((0.85, 0.85, 0.88)), xyz=(0, -fv['head_depth_m'] / 2, 0), rpy=(-math.pi / 2, 0, 0))}"
-             f"{visual('grille', cyl_geom(D / 2 * 0.95, 0.005), material((0.6, 0.6, 0.62)), xyz=(0, 0.002, 0), rpy=(-math.pi / 2, 0, 0))}"
-             f"{visual('pole', cyl_geom(0.015, z), material((0.8, 0.8, 0.82)), xyz=(0, -fv['head_depth_m'], -z / 2))}"
-             f"{visual('base', cyl_geom(fv['base_diameter_m'] / 2, 0.03), material((0.8, 0.8, 0.82)), xyz=(0, -fv['head_depth_m'], -z + 0.015))}"
+             f"{visual('head', cyl_geom(D / 2, fv['head_depth_m']), material(ap['fan_body_rgb']), xyz=(0, -fv['head_depth_m'] / 2, 0), rpy=(-math.pi / 2, 0, 0))}"
+             f"{visual('grille', cyl_geom(D / 2 * 0.95, 0.005), material(ap['fan_grille_rgb']), xyz=(0, 0.002, 0), rpy=(-math.pi / 2, 0, 0))}"
+             f"{visual('pole', cyl_geom(0.015, z), material(ap['fan_stand_rgb']), xyz=(0, -fv['head_depth_m'], -z / 2))}"
+             f"{visual('base', cyl_geom(fv['base_diameter_m'] / 2, 0.03), material(ap['fan_stand_rgb']), xyz=(0, -fv['head_depth_m'], -z + 0.015))}"
              f"</link>")
     yaw = math.atan2(wf["axis"][1], wf["axis"][0]) - math.pi / 2     # model +y = blowing direction
     return static_model("desk_fan", (x, y, z), links, rpy=(0, 0, yaw))
@@ -439,7 +454,7 @@ def spinning_arm_model(cfgs) -> str:
     a = cfgs["world"]["props"]["spinning_arm"]
     b = cfgs["beacon"]["red_led"]
     L = float(a["arm_length_m"])
-    r = 0.5 * float(b["diffuser_diameter_m"])
+    r = 0.5 * float(b["render_diameter_m"])
     hub = f"<link name='hub'>{inertial(1.0, 0.01, 0.01, 0.01)}{visual('stand', cyl_geom(0.015, a['position_m'][2]), material((0.2, 0.2, 0.2)), xyz=(0.05, 0, -a['position_m'][2] / 2))}</link>"
     arm = (f"<link name='arm'><gravity>false</gravity>{inertial(0.05, 1e-3, 1e-3, 1e-3)}"
            f"{visual('bar', box_geom((0.01, 0.01, L)), material((0.15, 0.15, 0.15)), xyz=(0, 0, L / 2))}"
@@ -454,7 +469,7 @@ def spinning_arm_model(cfgs) -> str:
 def slider_beacon_model(cfgs) -> str:
     s = cfgs["world"]["props"]["slider_beacon"]
     b = cfgs["beacon"]["red_led"]
-    r = 0.5 * float(b["diffuser_diameter_m"])
+    r = 0.5 * float(b["render_diameter_m"])
     rail = f"<link name='rail'>{inertial(1.0, 0.01, 0.01, 0.01)}</link>"
     car = (f"<link name='carriage'><gravity>false</gravity>{inertial(0.05, 1e-4, 1e-4, 1e-4)}"
            f"{visual('led_visual', sph_geom(r), material(b['diffuse_rgb'], emissive=b['emissive_rgb_full']), cast_shadows=False)}</link>")
@@ -472,7 +487,7 @@ def pendulum_model(cfgs) -> str:
     st = cfgs["world"]["hover_station_m"]
     H = float(p["stand_height_m"])
     Ls = float(p["string_length_m"])
-    r = 0.5 * float(b["diffuser_diameter_m"])
+    r = 0.5 * float(b["render_diameter_m"])
     damp = f(p["joint_damping_nms_per_rad"])
     m = float(cfgs["drone"]["payload"]["variants"]["red_led_beacon"]["mass_kg"])
     stand = (f"<link name='stand'>{inertial(5.0, 0.5, 0.5, 0.5)}"
@@ -494,7 +509,9 @@ def room_models(cfgs) -> str:
     r = cfgs["world"]["room"]
     sx, sy, sz = r["size_xyz_m"]
     cx, cy = r["centre_xy_m"]
-    wall = material(r["wall_rgb"], specular=0.02)
+    ap = cfgs["world"]["appearance"]
+    wall = material(ap["walls_rgb"], specular=ap["wall_specular"])
+    ceiling = material(ap["ceiling_rgb"], specular=ap["wall_specular"])
     t = 0.05
     floor_tex = "model://qkd_textures/floor_checker_noise.png"
     links = (f"<link name='floor'>{collision('c', f'<geometry><plane><normal>0 0 1</normal><size>{f(sx)} {f(sy)}</size></plane></geometry>')}"
@@ -503,7 +520,8 @@ def room_models(cfgs) -> str:
              ("wall_left", (cx, cy + sy / 2, sz / 2), (sx, t, sz)), ("wall_right", (cx, cy - sy / 2, sz / 2), (sx, t, sz)),
              ("ceiling", (cx, cy, sz), (sx, sy, t))]
     for name, xyz, size in walls:
-        links += f"<link name='{name}'>{pose(xyz)}{collision('c', box_geom(size))}{visual('v', box_geom(size), wall)}</link>"
+        mat = ceiling if name == "ceiling" else wall
+        links += f"<link name='{name}'>{pose(xyz)}{collision('c', box_geom(size))}{visual('v', box_geom(size), mat)}</link>"
     return static_model("room", (0, 0, 0), links)
 
 
@@ -660,12 +678,15 @@ def write_textures(cfgs) -> None:
     sx, sy, _ = cfgs["world"]["room"]["size_xyz_m"]
     nx_t, ny_t = int(round(sx / ft["tile_m"])), int(round(sy / ft["tile_m"]))
     rng = np.random.default_rng(1234)
-    tiles = (0.35 + 0.4 * rng.random((ny_t, nx_t))) * 255
-    img = np.kron(tiles, np.ones((ft["px_per_tile"], ft["px_per_tile"])))
-    img = np.clip(img, 0, 255).astype(np.uint8)       # tile-level randomness only: keeps the PNG small
+    ap = cfgs["world"]["appearance"]
+    base = np.asarray(ap["floor_base_rgb"], float)
+    shade = 1.0 + float(ap["floor_tile_variation"]) * (rng.random((ny_t, nx_t, 1)) - 0.5)
+    hue = 1.0 + float(ap["floor_hue_jitter"]) * (rng.random((ny_t, nx_t, 3)) - 0.5)
+    tiles = np.clip(base * shade * hue, 0.0, 1.0) * 255.0                      # RGB per tile
+    img = np.kron(tiles, np.ones((ft["px_per_tile"], ft["px_per_tile"], 1))).astype(np.uint8)
     out = ROOT / "models" / "qkd_textures" / "floor_checker_noise.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), cv2.cvtColor(img, cv2.COLOR_GRAY2BGR))
+    cv2.imwrite(str(out), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
 
 def write_model_dir(name: str, model_sdf: str, description: str) -> None:
@@ -691,10 +712,10 @@ def write_assets(cfgs) -> list[Path]:
                     "DJI Osmo Action 5 Pro body + webcam-mode camera sensor")
     write_model_dir("ring_light", f"<model name='ring_light'>{camera_link_sdf(cfgs['camera_action5'], fid, (0, 0, 0), (0, 0, 0), ring_light={}, beacon=cfgs['beacon'])}</model>",
                     "Action 5 Pro with the white LED ring light (tag option)")
-    r = 0.5 * float(b["diffuser_diameter_m"])
+    r = 0.5 * float(b["render_diameter_m"])
     write_model_dir("beacon_red_led", f"<model name='beacon_red_led'><static>true</static><link name='link'>"
                     f"{visual('led_visual', sph_geom(r), material(b['diffuse_rgb'], emissive=b['emissive_rgb_full']), cast_shadows=False)}</link></model>",
-                    "40 mm emissive red diffuser sphere")
+                    "bare 5 mm red LED (emissive)")
     t = cfgs["beacon"]["tag"]
     tv, _, _ = payload_visuals(cfgs, "tag")
     write_model_dir("tag_aruco", f"<model name='tag_aruco'><static>true</static><link name='link'>{tv}</link></model>",
@@ -726,11 +747,11 @@ def write_camera_truth(cfgs, rig: str, path: Path | None = None) -> Path:
     """EVALUATION ONLY: exact simulated intrinsics, distortion and mount pose."""
     cam = cfgs["camera_action5"]
     rc = cfgs["rigs"][rig]
-    lens = EquidistantLens.from_cfg(cam, rc["principal_point_offset_px"])
+    lens = make_lens(cam, rc["principal_point_offset_px"])
     truth = lens.truth_dict()
     truth.update({
         "rig": rig,
-        "render_sensor_type": cam["render"]["sensor_type"],
+        "render_sensor_type": render_sensor_type(cam),
         "mount_error_deg": dict(rc["mount_error_deg"]),
         "lens_height_m": rc["lens_height_m"],
         "nominal_pan_deg": rc.get("nominal_pan_deg", rc.get("initial_pan_deg")),

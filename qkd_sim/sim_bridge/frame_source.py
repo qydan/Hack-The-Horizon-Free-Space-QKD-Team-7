@@ -52,7 +52,7 @@ class GzAction5FrameSource:  # pragma: no cover - needs Gazebo
 
     def __init__(self, *, rig: str | None = None, fidelity: str | None = None, world=None,
                  overrides: dict[str, dict[str, Any]] | None = None, publish_meta: bool | None = None):
-        from sim_bridge.camera_model import EquidistantLens, rectilinear_to_equidistant_maps
+        from sim_bridge.camera_model import EquidistantLens, rectilinear_to_equidistant_maps, render_sensor_type
         from sim_bridge.gz_io import GzWorld, image_msg_type
         from sim_bridge.image_pipeline import Action5Pipeline
 
@@ -64,7 +64,7 @@ class GzAction5FrameSource:  # pragma: no cover - needs Gazebo
         self.world = world or GzWorld(cfgs["world"]["world_name"])
         pp = cfgs["rigs"][rig]["principal_point_offset_px"]
         remap = None
-        if cam["render"]["sensor_type"] == "rectilinear_remap":
+        if render_sensor_type(cam) == "rectilinear_remap":     # only for the equidistant fisheye option
             lens = EquidistantLens.from_cfg(cam)
             r = cam["render"]
             remap = rectilinear_to_equidistant_maps(lens, int(r["rectilinear_width_px"]),

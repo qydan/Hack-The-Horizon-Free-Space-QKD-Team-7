@@ -33,6 +33,6 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any] | None) -> dict[st
 def load_all(overrides: dict[str, dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
     """Load every simulator config file, applying per-file overrides (as a scenario does)."""
     names = ["world", "drone", "beacon", "fan", "camera_action5", "rigs", "gimbal_storm32",
-             "lighting", "photodiode", "bus"]
+             "lighting", "bus"]
     overrides = overrides or {}
     return {n: deep_merge(load(n), overrides.get(n)) for n in names}

@@ -7,7 +7,7 @@ mains:
 
 ceiling_panels:                         # used by office scenarios
   positions_m: [[1.5, 0.0, 2.9], [4.0, 0.0, 2.9]]     # ESTIMATE 2 panels (not 4): each flicker update is a light_config call
-  diffuse: [0.9, 0.9, 0.85]             # ESTIMATE
+  diffuse: [1.0, 0.96, 0.88]            # ESTIMATE warm-white office LED panels (not orange)
   intensity: 1.6                        # ESTIMATE (2 panels carry the light of 4)
   attenuation_range_m: 8.0              # ESTIMATE
   attenuation: {constant: 0.5, linear: 0.05, quadratic: 0.01}       # ESTIMATE

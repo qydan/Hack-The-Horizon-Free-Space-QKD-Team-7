@@ -11,7 +11,9 @@
     qkd run t3 gimbal --quick      20 s at fast fidelity
     qkd run t1 --no-view --duration 30 --fidelity full
     qkd score [run-dir]            score a run (default: the latest)
-    qkd shell                      a shell inside the simulator image
+    qkd dashboard [run-dir]        QBER / motion / key-gate dashboard (--live: follow a run in progress)
+    qkd replay [run-dir] --eve 0.5 re-run the key segment on recorded telemetry (--pns, --pool, --snr)
+    qkd shell                     a shell inside the simulator image
 
 On Windows use  .\\qkd ...  (qkd.cmd). Gazebo runs natively if it is installed, otherwise inside Docker
 automatically; either way the live camera is served to your browser.
@@ -231,6 +233,8 @@ def _run(scenario: str, rig: str | None, a) -> int:
         opts += ["--duration", str(a.duration)]
     if a.fidelity:
         opts += ["--fidelity", a.fidelity]
+    if getattr(a, "no_tracking", False):
+        opts.append("--no-tracking")
     if not a.no_view:
         opts += ["--view", str(VIEW_PORT)]
     if a.gui:
@@ -257,14 +261,45 @@ def cmd_demo(a) -> int:
     return _run("t5_latency", a.rig or "fixed", a)
 
 
+def latest_run(run_dir: str | None) -> Path:
+    if run_dir:
+        return Path(run_dir)
+    runs = sorted((ROOT / "runs").glob("*/summary.json"), key=lambda p: p.stat().st_mtime)
+    if not runs:
+        sys.exit(f"No runs yet. Try:  {Q} demo")
+    return runs[-1].parent
+
+
 def cmd_score(a) -> int:
-    run = Path(a.run_dir) if a.run_dir else None
-    if run is None:
-        runs = sorted((ROOT / "runs").glob("*/summary.json"), key=lambda p: p.stat().st_mtime)
-        if not runs:
-            sys.exit(f"No runs yet. Try:  {Q} demo")
-        run = runs[-1].parent
-    return call([py(), "-m", "evaluation.score", str(run)])
+    return call([py(), "-m", "evaluation.score", str(latest_run(a.run_dir))])
+
+
+def cmd_dashboard(a) -> int:
+    run = latest_run(a.run_dir)
+    log = run / "sandbox_log.jsonl"
+    if not log.exists():
+        sys.exit(f"{log} not found: the sandbox writes it during `{Q} run` (or use `{Q} replay` first)")
+    if a.live:
+        return call([py(), str(ROOT / "tools" / "live_dashboard.py"), str(log)])
+    out = run / "dashboard.html"
+    rc = call([py(), str(ROOT / "tools" / "make_dashboard.py"), str(log), str(out)])
+    if rc == 0:
+        print(f"Open {out}")
+    return rc
+
+
+def cmd_replay(a) -> int:
+    run = latest_run(a.run_dir)
+    tag = "pns" if a.pns else (f"eve{a.eve:g}" if a.eve else "replay")
+    log = run / f"sandbox_{tag}.jsonl"
+    cmd = [py(), "-m", "sandbox.main", "--replay", str(run), "--log", str(log)]
+    cmd += (["--eve", str(a.eve)] if a.eve else []) + (["--pns"] if a.pns else []) + (["--pool"] if a.pool else [])
+    cmd += ["--snr", str(a.snr)] if a.snr else []
+    rc = call(cmd)
+    if rc == 0:
+        rc = call([py(), str(ROOT / "tools" / "make_dashboard.py"), str(log), str(run / f"dashboard_{tag}.html")])
+        print(f"Open {run / f'dashboard_{tag}.html'}")
+    return rc
 
 
 def cmd_shell(_a) -> int:
@@ -294,6 +329,8 @@ def main() -> int:
         p.add_argument("--fidelity", choices=["full", "fast"])
         p.add_argument("--no-view", action="store_true", help="don't serve the live camera")
         p.add_argument("--gui", action="store_true", help="Gazebo GUI (native or Linux only)")
+        p.add_argument("--no-tracking", action="store_true",
+                       help="don't start tracking/ (simulator speed baseline; the sandbox then sees no telemetry)")
 
     r = sub.add_parser("run", help="run a scenario: qkd run t3 gimbal")
     r.add_argument("scenario")
@@ -307,6 +344,17 @@ def main() -> int:
     sc = sub.add_parser("score", help="score a run (default: latest)")
     sc.add_argument("run_dir", nargs="?")
     sc.set_defaults(fn=cmd_score)
+    db = sub.add_parser("dashboard", help="QBER / motion / gate dashboard of a run (default: latest)")
+    db.add_argument("run_dir", nargs="?")
+    db.add_argument("--live", action="store_true", help="follow a run in progress at http://127.0.0.1:8000")
+    db.set_defaults(fn=cmd_dashboard)
+    rp = sub.add_parser("replay", help="re-run the key segment on a run's recorded telemetry (no simulator)")
+    rp.add_argument("run_dir", nargs="?")
+    rp.add_argument("--eve", type=float, help="intercept-resend on this fraction of pulses")
+    rp.add_argument("--pns", action="store_true", help="photon-number-splitting attacker")
+    rp.add_argument("--pool", action="store_true", help="pool accepted blocks before distilling")
+    rp.add_argument("--snr", type=float, help="on-axis signal/noise (operating point)")
+    rp.set_defaults(fn=cmd_replay)
     sub.add_parser("shell", help="shell inside the simulator image").set_defaults(fn=cmd_shell)
     a = ap.parse_args()
     if not getattr(a, "fn", None):

@@ -148,6 +148,8 @@ class TruthPublisher:  # pragma: no cover - needs Gazebo
         self._joints: tuple[float, float, float] | None = None
         self._prev: tuple[float, np.ndarray] | None = None
         self.records = 0
+        from collections import deque
+        self.history: deque = deque(maxlen=600)      # recent records, for the live accuracy overlay
         if rig == "rig_gimbal":
             world.subscribe(Model, f"/world/{world.world}/model/{gimbal_model}/joint_state", self._on_joints)
 
@@ -172,3 +174,4 @@ class TruthPublisher:  # pragma: no cover - needs Gazebo
                                   fan_level=self.fan_level_fn(), lighting=self.lighting_fn())
             self.sock.send_multipart([self.topic, json.dumps(truth).encode()])
             self.records += 1
+            self.history.append(truth)

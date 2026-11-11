@@ -1,22 +1,41 @@
-# Tracking targets (section 6). Every target must be visible light: the Action 5 Pro has an IR-cut filter.
+# Tracking targets (section 6). The drone carries a red LED (~630 nm); the ground camera is RGB (Action 5 Pro,
+# IR-cut filter), so every target is visible light. There is no IR emitter or IR receiver anywhere in the sim.
 target: red_led                         # red_led | tag (scenarios override)
 
 red_led:
-  wavelength_nm: 630                    # SPEC about 630 nm red LEDs
-  n_leds: 3                             # SPEC 2-3 LEDs
-  diffuser_diameter_m: 0.040            # SPEC ping-pong ball
+  # A single bare LED, no diffuser: small and directional (brightest on its axis, fading off-axis).
+  wavelength_nm: 630                    # SPEC about 630 nm red LED
+  package: rgb                          # SPEC team LED: common RGB LED, driven on its red channel only
+  drive:                                # SPEC team LED datasheet (typical). Electrical red: 20 mA x 2.0 V = 40 mW.
+    current_a: 0.020                    # SPEC same current on every channel
+    forward_voltage_red_v: 2.0          # SPEC
+    forward_voltage_blue_v: 3.0         # SPEC (not used: red channel only)
+  # Rendered brightness has no physical units in Gazebo: emissive_rgb_full below sets how bright the LED looks
+  # on the simulated camera. MEASURE: tune it so a sim frame matches a real Action 5 Pro frame at the same range.
+  led_diameter_m: 0.005                 # ESTIMATE 5 mm through-hole LED; MEASURE (about 1.3 px at 3 m on this camera)
+  # Rendered size: a 20 mA LED saturates the sensor and lens blur spreads it into a blob much larger than the die.
+  # Gazebo has no bloom and caps emissive at 1.0, so a 5 mm sphere (about 1.3 px at 3 m) is simply not drawn.
+  # The LED is therefore rendered at its APPARENT size on the real camera.
+  render_diameter_m: 0.015              # ESTIMATE about 4 px at 3 m; MEASURE: blob width in a real Action 5 Pro frame at 3 m
+  post_height_m: 0.010                  # ESTIMATE LED on a short post above the top shell
+  viewing_half_angle_deg: 30.0          # ESTIMATE half-intensity angle (datasheet 2-theta-1/2 = 60 deg); MEASURE
+  # Beam pattern I(theta) = cos(theta)^m, m chosen so I = 0.5 at the half-intensity angle; 0 behind the LED.
+  # The LED axis is the tx_frame axis: toward the camera at the start yaw (sim_bridge/truth_publisher.tx_axis_body).
+  beam_update_rate_hz: 60.0             # ESTIMATE how often the drone-attitude dimming is re-sent (camera is 30 fps)
   emissive_rgb_full: [1.0, 0.05, 0.02]  # ESTIMATE emissive colour at 100% (tune so the rendered core is just below 255 at gain 1)
-  diffuse_rgb: [0.9, 0.85, 0.8]         # ESTIMATE ping-pong-ball white plastic
+  diffuse_rgb: [0.35, 0.03, 0.02]       # ESTIMATE red epoxy lens
+  # LED drive: STEADY by default (constantly lit at high_level, like the real rig). Set enabled: true for the
+  # spec's 7 Hz blink (square wave high_level / low_level), which the tracker can then lock in on. tracking.yaml
+  # (acquire.beacon: auto) follows this switch.
   modulation:
-    enabled: true
-    frequency_hz: 7.0                   # SPEC clear of 50 Hz->10 Hz and 60 Hz->0 Hz aliases at 30 fps
+    enabled: false                      # SPEC real rig: steady red LED. true = blink at frequency_hz
+    frequency_hz: 7.0                   # SPEC blink only: clear of 50 Hz->10 Hz and 60 Hz->0 Hz aliases at 30 fps
     high_level: 1.00                    # SPEC
     low_level: 0.40                     # SPEC never off
     duty: 0.5                           # SPEC square wave
     phase_s: 0.0                        # ESTIMATE
   # Runtime material change method, in order of preference (section 6.1). beacon_modulator.py tries them in order.
   methods: [visual_config, plugin, shell_toggle]
-  update_rate_hz: 1000.0                # ESTIMATE one update per physics step; edges only matter, so 2 updates/period would do
 
 tag:
   dictionary: DICT_4X4_50               # SPEC
@@ -38,10 +57,7 @@ pendulum:
   joint_damping_nms_per_rad: 0.0005     # ESTIMATE light damping
   stand_height_m: 2.2                   # ESTIMATE pivot so the beacon hangs at 1.2 m
 
-ir_beacon_reference:                    # used only by the IR-cut validation (A10)
-  wavelength_nm: 850                    # SPEC
-
-camera_passband_nm: [400, 680]          # SPEC behaviour (IR-cut filter); used by scenario validation
+camera_passband_nm: [400, 680]          # SPEC behaviour (RGB camera, IR-cut filter); used by scenario validation
 
 texture:
   flip_horizontal: false                # set true if the tag appears mirrored in view_camera.py (plane UV orientation)

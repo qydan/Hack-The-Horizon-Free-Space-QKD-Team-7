@@ -4,7 +4,6 @@ host: 127.0.0.1                         # SPEC
 ports:
   telemetry: 5556                       # SPEC I2 tracking -> sandbox
   abort: 5557                           # SPEC I8 sandbox gate -> tracking
-  photodiode: 5558                      # SPEC I9 photodiode sensor -> tracking (optional)
   keys: 5559                            # SPEC I4 sandbox -> operator display
   eve: 5560                             # SPEC I6 operator UI -> sandbox
   truth: 5590                           # SPEC ground truth: EVALUATION ONLY
@@ -17,13 +16,12 @@ internal_ports:
   sim_events: 5572                      # ESTIMATE occluder, lighting and fan schedule events (for the recorder)
 
 allow_list:
-  tracking: [5556, 5557, 5558]          # SPEC (gimbal and frames arrive through in-process sim_bridge interfaces)
+  tracking: [5556, 5557]          # SPEC (gimbal and frames arrive through in-process sim_bridge interfaces)
   sandbox: [5556, 5557, 5559, 5560]     # SPEC
 
 topics:                                 # first frame of every multipart message
   telemetry: telemetry
   abort: abort
-  photodiode: photodiode
   keys: keys
   eve: eve
   truth: truth

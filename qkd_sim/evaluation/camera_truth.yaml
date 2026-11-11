@@ -1,14 +1,15 @@
 # EVALUATION ONLY. Never read by calibration/ or tracking/ (test B1).
-model: cv2.fisheye (equidistant, D = 0)
+model: pinhole (rectilinear), cv2 standard model with D = 0
+projection: rectilinear
 image_size_px:
 - 1920
 - 1080
 K:
-- - 785.7706904651291
+- - 750.0342014464487
   - 0.0
   - 967.5
 - - 0.0
-  - 785.7706904651291
+  - 750.0342014464487
   - 534.5
 - - 0.0
   - 0.0
@@ -18,15 +19,16 @@ D:
 - 0.0
 - 0.0
 - 0.0
-f_px: 785.7706904651291
-hfov_deg: 140.0
-vfov_deg: 78.75
-ifov_mrad_per_px_centre: 1.2726359129125318
+- 0.0
+f_px: 750.0342014464487
+hfov_deg: 104.0
+vfov_deg: 71.5052966926242
+ifov_mrad_per_px_centre: 1.333272533534457
 principal_point_offset_px:
 - 8.0
 - -5.0
-rig: rig_fixed
-render_sensor_type: wideanglecamera
+rig: rig_gimbal
+render_sensor_type: camera
 mount_error_deg:
   yaw: 0.5
   pitch: -0.3

@@ -31,10 +31,10 @@ def _truth(run_dir: Path) -> list[dict]:
 
 def _lens_and_pose(rig: str):
     from sim_bridge import config as cfgmod
-    from sim_bridge.camera_model import EquidistantLens
+    from sim_bridge.camera_model import make_lens
     from sim_bridge.truth_publisher import camera_rotation, lens_position
     cfgs = cfgmod.load_all()
-    lens = EquidistantLens.from_cfg(cfgs["camera_action5"], cfgs["rigs"][rig]["principal_point_offset_px"])
+    lens = make_lens(cfgs["camera_action5"], cfgs["rigs"][rig]["principal_point_offset_px"])
     R = camera_rotation(rig, cfgs["rigs"][rig], None)
     return lens, lens_position(rig, cfgs["rigs"][rig], R), R
 
@@ -128,7 +128,8 @@ def test_a6_beacon_modulation(tmp_path):
         ts.append(fr.t_capture_sim)
 
     _run("t1_noise_floor", "rig_fixed", tmp_path, duration=12.0, fidelity="full", frame_callback=cb,
-         patch={"lighting": {"initial": "dark"}})
+         patch={"lighting": {"initial": "dark"},
+                "overrides": {"beacon": {"red_led": {"modulation": {"enabled": True}}}}})   # A6 tests the blink
     r = np.array(reds[30:])
     spec = np.abs(np.fft.rfft(r - r.mean()))
     f = np.fft.rfftfreq(len(r), np.mean(np.diff(ts)))

@@ -36,11 +36,11 @@ class MjpegServer:
         self._httpd: ThreadingHTTPServer | None = None
 
     # ------------------------------------------------------------------------------------------ frames
-    def update(self, bgr: np.ndarray, lines: list[str] | None = None) -> bool:
-        """Offer a frame; returns True if it was encoded (False when rate-limited)."""
+    def update(self, bgr: np.ndarray, lines: list[str] | None = None, force: bool = False) -> bool:
+        """Offer a frame; returns True if it was encoded (False when rate-limited, unless ``force``)."""
         import cv2
         now = time.monotonic()
-        if now - self._last < self.min_dt:
+        if not force and now - self._last < self.min_dt:
             return False
         self._last = now
         h, w = bgr.shape[:2]

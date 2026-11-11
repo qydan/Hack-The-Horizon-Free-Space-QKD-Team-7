@@ -1,4 +1,4 @@
-# Support scenario for acceptance test A10: MUST be rejected (850 nm beacon, Action 5 Pro has an IR-cut filter).
+# Support scenario for acceptance test A10: MUST be rejected (850 nm beacon: the Action 5 Pro is an RGB camera with an IR-cut filter).
 test: A10
 description: Invalid on purpose - an 850 nm beacon is invisible to the Action 5 Pro.
 world: qkd_lab

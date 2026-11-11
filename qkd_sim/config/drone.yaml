@@ -38,6 +38,18 @@ aero:
   body_cd_area_m2: 0.02                 # ESTIMATE 4 m/s crosswind -> ~4.5 deg lean; MEASURE in T3
   air_density_kgpm3: 1.2                # SPEC (standard air)
 
+# How the drone flies. simple (default): built-in flight model, no autopilot (sim_bridge/simple_flight.py).
+# px4: PX4 SITL + MAVSDK offboard (needs the PX4 build in the image; arming/health checks apply).
+flight_model: simple
+
+simple_flight:
+  position_bandwidth_hz: 0.25           # ESTIMATE position-hold response of DJI vision positioning (~4 s)
+  damping_ratio: 0.9                    # ESTIMATE
+  integral_gain_ratio: 0.15             # ESTIMATE Ki = ratio * wn^3 (removes the steady wind offset)
+  takeoff_climb_s: 4.0                  # ESTIMATE
+  integration_rate_hz: 1000.0           # ESTIMATE internal step
+  update_rate_hz: 100.0                 # ESTIMATE pose writes to Gazebo (camera is 30 fps)
+
 px4:
   airframe_id: 4099                     # ESTIMATE pick an unused number; install script checks for clashes
   mpc_thr_hover: 0.50                   # ESTIMATE with THR_MDL_FAC=1 (quadratic thrust model); verify with A3
@@ -48,9 +60,8 @@ payload:
   variant: red_led_beacon               # one of: red_led_beacon, tag, none (scenarios override)
   variants:
     red_led_beacon:
-      mass_kg: 0.018                    # SPEC (design doc)
-      offset_m: [0.0, 0.0, 0.064]       # SPEC sphere centre 35 mm above top shell (top shell at +29 mm)
-      diameter_m: 0.040                 # SPEC
+      mass_kg: 0.018                    # ESTIMATE design-doc figure for LED + battery + mount; MEASURE the bare-LED payload
+      offset_m: [0.0, 0.0, 0.0415]      # ESTIMATE bare 5 mm LED on a 10 mm post above the top shell (top shell at +29 mm)
     tag:
       mass_kg: 0.003                    # SPEC
       offset_m: [-0.071, 0.0, 0.0]      # ESTIMATE on the rear face (body x = -69 mm) plus 2 mm plate
@@ -69,6 +80,10 @@ station_keeping:
     sigma_horizontal_m: 0.10            # SPEC 3 sigma = +-0.3 m (DJI vision hover)
     sigma_vertical_m: 0.03              # SPEC 3 sigma = +-0.1 m
     tau_s: 5.0                          # SPEC
+    limit_to_spec: true                 # SPEC soft-limit the wander to DJI's +-0.3 m / +-0.1 m (tanh): without it an
+                                        # OU walk passes 0.3 m in ~1 run in 5 (75 s); the vision hold doesn't
+    limit_horizontal_m: 0.3             # SPEC DJI vision-positioning hover accuracy
+    limit_vertical_m: 0.1               # SPEC
   slow_push:
     distance_m: 0.5                     # SPEC (T6)
     duration_s: 60.0                    # SPEC

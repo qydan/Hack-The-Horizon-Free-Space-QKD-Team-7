@@ -2,9 +2,12 @@
 
 A Gazebo Harmonic + PX4 SITL simulation of the demo's **air segment** (DJI Mini 2 SE stand-in, 7 Hz red LED
 beacon or ArUco tag, desk fan) and **ground segment** (DJI Osmo Action 5 Pro in webcam mode, on a fixed tripod
-or a STorM32 3-axis gimbal), with all the plumbing between them. The three **OPEN** blocks (tracking,
-calibration, cyber sandbox) are interface stubs only; the team writes them, and the same code then runs on the
-real hardware.
+or a STorM32 3-axis gimbal), with all the plumbing between them. The team's blocks, ported from the repo's
+`src/` (tracker, BB84 sandbox) and retuned for this camera, run inside it: **tracking** (lock-in or steady-spot
+acquisition, Kalman filter, gimbal / virtual-receiver pointing), the **cyber sandbox** (error budget,
+decoy-state channel, Eve, BB84 with Cascade and Toeplitz, the 11% gate) and the **preflight brightness
+calibration**. The same code runs on the real hardware. See
+[Tracking, sandbox and calibration](#tracking-sandbox-and-calibration).
 
 ## Quick start
 
@@ -20,7 +23,9 @@ Everything goes through one command, `qkd` (on Windows type `.\qkd`, on Linux/ma
 .\qkd demo gimbal            # the same with the STorM32 gimbal rig
 .\qkd run t3 gimbal          # any scenario: a unique prefix is enough; rig = fixed | gimbal (or A | B)
 .\qkd run t1 fixed --quick   # 20 s at fast fidelity
-.\qkd score                  # score the latest run (once tracking exists)
+.\qkd score                  # score the latest run's tracking against ground truth
+.\qkd dashboard              # QBER / motion / key-gate dashboard of the latest run (--live while it runs)
+.\qkd replay --eve 0.5       # re-run the key segment on the latest run's telemetry (--pns, --pool, --snr)
 .\qkd test --sim             # acceptance tests in Gazebo / PX4
 .\qkd list                   # all scenarios
 ```
@@ -39,8 +44,10 @@ Everything goes through one command, `qkd` (on Windows type `.\qkd`, on Linux/ma
 
 | Part | State |
 |---|---|
-| Configs, models, worlds, scenarios, bridges, bus, recorders, evaluation, OPEN stubs, `qkd` launcher | Built |
-| Offline tests (models, camera pipeline, gimbal, no-bypass, stubs, world generation, launcher) | **74 pass** (`qkd test`) |
+| Configs, models, worlds, scenarios, bridges, bus, recorders, evaluation, `qkd` launcher | Built |
+| Tracking, sandbox, preflight brightness calibration (ported from `src/`) | Built; closed-loop tested offline |
+| Calibration: intrinsics, mount alignment, gimbal response, rolling shutter, latency | Still OPEN stubs |
+| Offline tests (models, camera pipeline, gimbal, no-bypass, world generation, launcher, tracking, sandbox) | **107 pass** (`qkd test`, ~4 min) |
 | End-to-end run in Docker (Gazebo + PX4 + all bridges + browser viewer) | **Works** (`qkd demo`) |
 | Simulator acceptance tests (A1-A9, A14) | Written; not yet run (`qkd test --sim`) |
 
@@ -80,15 +87,16 @@ factor, frame rate, beacon method, lighting update rate, port violations), `tele
                                                                                         MJPG, latency)          readback)
                         truth_publisher.py ──> 5590 (evaluation only)                        │                    │
                                                                                              v                    v
-                                                    tracking/ [OPEN] ── FrameSource ─────────┘  GimbalIO ─────────┘
+                                                    tracking/ ──────── FrameSource ─────────┘  GimbalIO ─────────┘
                                                         │ 5556 telemetry          ^ 5557 abort
                                                         v                         │
-                                                    sandbox/ [OPEN] ──> 5559 keys     <── 5560 Eve toggle
+                                                    sandbox/ ──────────> 5559 keys     <── 5560 Eve toggle
 ```
 
 `tools/run_scenario.py` is the bridge host: it generates the world from the configs, starts `gz sim`, PX4 SITL
 (attached to the `mini2se` model already in the world, `PX4_GZ_STANDALONE=1`), all bridges as threads on the
-sim clock, the recorders, the tracker (when implemented) and the sandbox (always under the port guard).
+sim clock, the recorders, the tracker (`--target` from the scenario) and the sandbox (always under the port
+guard, writing `sandbox_log.jsonl`), and plays a scenario's Eve schedule on 5560.
 
 **Every number lives in `config/*.yaml`.** The SDF models and worlds are generated from them by
 `tools/world_builder.py` (`--write-assets` refreshes `models/` and `worlds/`), so no value is duplicated in an
@@ -109,17 +117,22 @@ The Storm32 emulator has a single owner, the bridge host, which drives the Gazeb
 it over an internal port. `make_gimbal_io(..., local=True)` builds an in-process emulator for tests.
 
 **Pan drift (config B).** The gimbal has no magnetometer, so its pan readback drifts (random walk, 0.2°/min).
-A tracker that computes "world angle = gimbal angle + pixel offset" will drift slowly in pan. Handling that
-belongs to the OPEN tracking block.
+The tracker computes "world angle = gimbal angle - pixel offset", so this drift moves its world frame:
+it shows up in `drift_mrad` over long runs (about 3.5 mrad/min, 1 sigma), not in the residual, which is measured
+in the image.
 
 **Config A consequence.** With nothing to steer, the receiver pointing is either a fixed boresight (residual =
-drone offset from the image centre) or a software-steered virtual receiver that follows the tracker with a lag.
-That choice belongs to the team. Telemetry `gimbal_*` fields stay constant.
+drone offset from the boresight) or a software-steered virtual receiver that follows the tracker with the real
+frame latency plus a servo lag (`tracking.yaml: pointing.mode_rig_fixed`, default `virtual_receiver`, as
+`src/`'s `--virtual-mount`). Telemetry `gimbal_*` fields stay constant.
 
 ## Camera emulation (Action 5 Pro, webcam mode)
 
-1920×1080 at 30 fps, equidistant fisheye with 140° HFOV (f = 786 px, 1.27 mrad/px at the centre, 79° VFOV),
-rendered by a `wideanglecamera` sensor (Gaussian noise 0.007). `GzAction5FrameSource` then applies, in sim time:
+1920×1080 at 30 fps through a **rectilinear (pinhole) lens with 104° HFOV**: the Action 5 Pro's dewarped
+"standard" mode, as on the real rig (f = 750 px, 1.33 mrad/px at the centre, 71.5° VFOV), rendered by an ordinary
+`camera` sensor (Gaussian noise 0.007). The build spec's 140° equidistant fisheye is still available:
+`camera_action5.yaml: lens.projection: equidistant, lens.hfov_deg: 140` (rendered by a `wideanglecamera`, about 6x
+the rendering cost). `GzAction5FrameSource` then applies, in sim time:
 
 1. **Rolling shutter** (`fidelity: full`): sub-frames rendered at 5 bands / 15 ms = 333 Hz; output band k comes
    from the sub-frame nearest its readout time. `fidelity: fast` renders once per frame.
@@ -133,11 +146,28 @@ rendered by a `wideanglecamera` sensor (Gaussian noise 0.007). `GzAction5FrameSo
 because the real camera does not report it; it goes to `frames_meta.csv` for evaluation. Tracking has to
 estimate the gain for the telemetry `exposure_gain` field.
 
-The camera has an IR-cut filter, so scenario validation rejects an 850 nm beacon (`test_a10_ir_beacon`).
+**Beacon: a bare red LED, steady by default.** One 5 mm red LED (20 mA, 2.0 V), no diffuser, on a short post,
+pointing at the camera; it dims off-axis (half brightness at 30 deg) as the drone leans. It is rendered at its
+apparent size on the camera (15 mm, MEASURE), because a 1.3 px LED is not drawn by Gazebo. It is constantly lit
+like the real rig; `beacon.yaml: red_led.modulation.enabled: true` switches on the spec's 7 Hz blink.
 
-**Tag limit.** At 3 m the 8 cm ArUco tag spans about 21 px on this camera, too few for a reliable lean (pose)
+**No IR anywhere.** The drone carries a red LED (~630 nm) and the ground camera is RGB with an IR-cut filter, so
+scenario validation rejects any non-visible beacon, e.g. 850 nm (`test_a10_ir_beacon`). The spec's optional
+940 nm IR data link (photodiode sensor, port 5558, telemetry `rx_signal`/`rx_background`) has been removed,
+matching the real rig.
+
+**Tag limit.** At 3 m the 8 cm ArUco tag spans about 20 px on this camera, too few for a reliable lean (pose)
 estimate. T3 with `t3_turbulence_tag` and truth comparison will show how bad it is. Options: a shorter range
 (2 m, about 31 px), or a larger tag if the weight budget allows.
+
+## How the drone flies
+
+By default the drone uses a **built-in flight model** (`drone.yaml: flight_model: simple`,
+`sim_bridge/simple_flight.py`), not an autopilot: a PID position hold toward the hover station plus its random
+wander, the desk-fan jet as drag, and the attitude tilted to point the thrust, so the drone leans into the wind
+(steady lean = atan(drag / weight)) and is pushed sideways before recovering. Nothing has to arm, so it always
+takes off (airborne about 4 s after start). `flight_model: px4` switches back to PX4 SITL + MAVSDK (PX4 is still
+built in the image; arming and health checks then apply and are slow when the sim runs well below real time).
 
 ## Scenarios
 
@@ -153,7 +183,7 @@ recorders. `tools/run_scenario.py <scenario> [--rig ...]` runs each listed rig i
 | `t4_lighting` | T4 | A, B | dark, office 50 Hz, office 60 Hz, bright lamp, window, distractors (40 s each) |
 | `t5_latency` | T5 | A, B | Fan low; capture, delivery and processing timestamps |
 | `t6_causality` | T6 | A, B | Fan off → low → high, slow push from 200 s; B adds 0, 1, 2, 4, 8 mrad gimbal offset steps |
-| `t7_eve` | T7 | A, B | Fan low, 3 min hover (Eve toggled from the sandbox UI) |
+| `t7_eve` | T7 | A, B | Fan low, 3 min hover; Eve (port 5560) intercept-resend 50% at 60-90 s, PNS at 120-150 s |
 | `calib_intrinsics` | cal | A, B | Checkerboard scripted through 24 poses across the 140° view |
 | `calib_alignment` | cal | A, B | Static beacons at (1, 0, 1) and (4, 0, 1) |
 | `calib_gimbal` | cal | B | Step, slew and hold commands |
@@ -162,6 +192,7 @@ recorders. `tools/run_scenario.py <scenario> [--rig ...]` runs each listed rig i
 | `calib_brightness` | cal | A, B | Beacon at a known 4 m range |
 | `pendulum` | fallback | A, B | Beacon on a 1 m string in the fan jet, low then high |
 | `mission_300m` | D3 | B | `qkd_field`, drone at 300 m / 50 m altitude, GNSS wander, beacon scaled 10× |
+| `tracking_sweep` | tracking | A, B | Scripted path, no wander, fan off: holds, 30 cm steps, sideways sweeps at 0.2 → 1.5 m/s, a figure-8, range 2 → 4 m. Score per segment with `python tools/tracker_accuracy.py` |
 | `test_a7_slider` | A7 | A | Beacon sliding sideways at 1 m/s at 3 m |
 | `test_a10_ir_beacon` | A10 | | Invalid on purpose (850 nm beacon) |
 
@@ -169,17 +200,99 @@ recorders. `tools/run_scenario.py <scenario> [--rig ...]` runs each listed rig i
 reliably. `mission_300m` scales the beacon 10× (`world.yaml: mission.beacon_scale`). Read its results as a
 demonstration that a commercial system needs a narrow-field camera.
 
-## Plugging in the OPEN blocks
+## Tracking, sandbox and calibration
 
-| Block | Files | Inputs | Outputs |
+The team's blocks, ported from the repo's `src/` into the interfaces the simulator defines. `src/` stays as the
+standalone version (pinhole webcam, 120 fps, its own simulated rig); these packages are the versions that run
+against the Action 5 Pro emulation and the STorM32, and they must stay self-contained (the Docker image mounts only
+`qkd_sim/`).
+
+| Block | Ported from | Inputs | Outputs |
 |---|---|---|---|
-| `tracking/` | `acquire`, `track`, `kalman`, `pointing`, `state_machine`, `motion_estimate`, `pose`, `telemetry_out`, `main` | `make_frame_source()`, `make_gimbal_io(rig)`, `config/tracking.yaml`, `config/calibration.yaml`, aborts on 5557 | I2 telemetry on 5556 (validated against `telemetry/schema.json`), `GimbalIO.set_target` in config B |
-| `calibration/` | `intrinsics`, `mount_alignment`, `gimbal_response`, `rolling_shutter`, `latency`, `preflight_brightness` | frames, gimbal readback, the `calib_*` scenarios | `config/calibration.yaml` |
-| `sandbox/` | `error_budget`, `channel_decoys`, `eve`, `bb84`, `gate`, `key_store`, `main` | 5556 telemetry, 5560 Eve toggle, `config/sandbox.yaml` | 5557 aborts, 5559 keys |
+| `tracking/` | `src/vision.py`, `src/tracker.py`, `src/gimbal.py` | `make_frame_source()`, `make_gimbal_io(rig)`, `config/tracking.yaml`, `config/calibration.yaml`, aborts on 5557 | I2 telemetry on 5556 (validated against `telemetry/schema.json`), `GimbalIO.set_target` in config B |
+| `sandbox/` | `src/error_budget.py`, `channel.py`, `decoy.py`, `qkd_core.py`, `key_pool.py`, `sandbox.py` | 5556 telemetry, 5560 Eve toggle, `config/sandbox.yaml` | 5557 aborts, 5559 key-block decisions, `--log` run log |
+| `calibration/preflight_brightness` | the brightness half of `src/tracker.py` `calibrate()` | the `calib_brightness` scenario | `config/calibration.yaml: preflight_brightness` |
+| `calibration/` (the other five) | nothing in `src/` | the `calib_*` scenarios | still OPEN stubs |
 
-Each file holds the typed signatures and docstrings; fill in the bodies. `run_scenario.py` starts
-`python -m tracking.main --rig <rig>` once `tracking/main.py: run` is no longer a placeholder, and always starts
-`sandbox.main` under `tools/port_guard.py`.
+**Tracking** (`tracker.Tracker` wires one frame through all of it):
+
+- **Acquisition.** For a blinking beacon: 7 Hz lock-in on the linear-light red channel, using each frame's capture
+  time. Its 20-frame window cancels the 10 Hz and 0 Hz aliases of mains flicker. For a steady beacon (the default,
+  `beacon.yaml red_led.modulation.enabled: false`): `src/`'s small-bright-spot detector on redness (R − max(G, B))
+  at full resolution. A spot must stay lit for 0.5 s (the 2 Hz red indicator never does), with a core-size limit
+  against the red lamp and an optional `search_zone`. ArUco is used for the tag target.
+- **States.** SEARCH → ACQUIRE (consecutive consistent hits) → TRACK ↔ COAST.
+- **Fine track.** Inside the ROI the lock-in confirms the spot, then a sub-pixel centroid is taken on *this*
+  frame's redness at its rolling-shutter row time. World angle = gimbal readback interpolated to that row time minus the pixel
+  offset, fed to a gated constant-velocity Kalman filter.
+- **Lens.** The active lens of `camera_action5.yaml` (rectilinear 104° by default, or the 140° fisheye) until
+  `calibration/intrinsics.py` writes K and D.
+- **Pointing.** In rig_gimbal: `set_target` with a velocity lead over the frame latency, plus a PI term on the image
+  offset. In rig_fixed: the virtual receiver.
+- **Telemetry.** Drift and jitter around a boresight (taken from the first seconds after lock), and intensity =
+  lock-in amplitude ÷ estimated exposure gain ÷ reference. The gain is estimated by replaying the AE law on the
+  frame means. Lean and range come from the ArUco pose.
+
+**Sandbox:** one `Sandbox` per run streams telemetry records into pulses (1 GHz emulated source):
+
+- The error budget maps residual, lean and drift, intensity and range to a transmittance.
+- Click counts per class come from a decoy-state model (signal / decoy / vacuum), with Eve (intercept-resend or
+  PNS) inside the channel.
+- BB84 then sifts, discloses a 20% sample for QBER, runs Cascade and Toeplitz.
+- The gate aborts a block on pooled QBER ≥ 11% or inconsistent decoy statistics; an abort is sent to the tracker
+  on 5557.
+
+**Offline closed-loop tests** (`tests/test_tracking_offline.py`, `tests/synthetic_rig.py`):
+
+- Synthetic hover scenes are pushed through the real `Action5Pipeline` (auto-exposure, 150 ms latency,
+  principal-point offset) and, for rig_gimbal, the real STorM32 dynamics, with the mount error and the lighting
+  distractors. Ground truth scores the result.
+- Results:
+  - first lock about 0.7 s after the beacon appears (blink; under 0.5 s steady)
+  - err_x / err_y within about 0.4 mrad RMS of truth, after the constant bias from the uncalibrated lens and mount
+  - the gimbal slews about 11° onto the drone
+  - occlusions coast or re-acquire
+  - a gate abort re-acquires in under 1 s
+  - the exposure-gain estimate stays within 10% through a 2.5× AE step
+- `tests/test_sandbox_offline.py` reproduces `src/`'s numbers:
+  - about 3% QBER with keys when calm
+  - intercept-resend on half the pulses gives about 14.5% and aborts
+  - PNS is caught by the decoy check
+  - keys stop at about 4% QBER per 1 s block
+  - `pool` recovers keys around 3.9% QBER, but not at 4.6% (there the decoy-certified single-photon share no longer
+    covers the Cascade leakage)
+
+**Findings to keep in mind:**
+
+- **Residual floor.** The camera's 150 ms latency is ~2.5× `src/`'s. Even with a velocity lead, the residual floor
+  in calm hover is about 3 mrad (virtual receiver) and 4 mrad (gimbal), against the 10 mrad virtual receiver
+  half-width.
+- **Take-off and the reference.** The drone takes off at t = 0 and the tracker locks while it is still on the
+  floor. In Gazebo t5, a boresight taken during the climb read as 100–180 mrad of drift. The error budget saw
+  the beam pointing about 8° away, and the gate aborted 37 of 44 blocks. The boresight is now fixed only on a
+  trend-free hover window, then follows the hover mean (30 s). Re-run on that same recorded telemetry: 1 abort
+  and 39 keys.
+- **The LED is faint in colour.** A Gazebo render of the 15 mm LED is pale pink (redness about 56 before AE).
+  AE in a bright office and MJPG's halved chroma resolution leave about 15. The thresholds in `tracking.yaml` are
+  set for that; the original ones (30–40, tuned on a pure-red LED) never locked at all. The test rig now
+  reproduces the measured colour and MJPG.
+- **Steady beacon.** A steady LED can't be told from a steady lamp by blinking. On the plain red channel the
+  detector locked onto a white glint 112 mrad off the LED; on brightness alone it took the 2 Hz red indicator.
+  Redness, a 0.5 s persistence test and a core-size limit handle both. The size limit also rejects the LED closer
+  than about 1.5 m (T1's 1 m pass), so use `search_zone` there.
+- **Exposure gain.** The AE replay must meter exactly like the camera. On real hardware, lock the exposure or
+  identify the AE law first.
+- **Lean counted twice.** The LED dims off-axis, so with a tag pose a lean costs signal twice: through intensity and
+  through the error budget's transmitter factor.
+
+**Commands:**
+
+- `qkd run …` runs both blocks. `qkd dashboard` draws `runs/<id>/sandbox_log.jsonl`, and `qkd dashboard --live`
+  follows a run in progress.
+- `qkd replay [--eve 0.5 | --pns]` re-runs the key segment on a recorded flight.
+- `python -m tools.eve_toggle intercept 0.5` sends the operator Eve toggle. `t7_eve` schedules the same toggles.
+- `python tools/tune.py` prints the residual / lean dose-response table.
+- `python -m calibration.preflight_brightness --range 4` measures I_cal during `calib_brightness`.
 
 **No-bypass rule.** `tracking/` may import only `sim_bridge.frame_source`, `sim_bridge.gimbal_io` and
 `telemetry` from this repo. Neither `tracking/` nor `sandbox/` may import `sim_bridge.truth_publisher`,
@@ -263,6 +376,9 @@ regenerated by `python3 tools/list_estimates.py` (`--measure-only` for the short
 
 | File | Key | Value | Tag | Note |
 |---|---|---|---|---|
+| `world.yaml` | `bridge.clock_rate_hz` | 250.0 | ESTIMATE |  |
+| `world.yaml` | `bridge.pose_rate_hz` | 200.0 | ESTIMATE |  |
+| `world.yaml` | `render.shadows` | false | ESTIMATE | visual realism only; nothing measured depends on shadows |
 | `world.yaml` | `room.centre_xy_m` | [2.5, 0.0] | ESTIMATE | room placed so camera and drone both sit well inside |
 | `world.yaml` | `room.wall_rgb` | [0.55, 0.55, 0.52] | ESTIMATE | matte wall albedo |
 | `world.yaml` | `camera_mount.lens_height_m` | 1.00 | MEASURE | lens-centre height on the real tripod |
@@ -314,7 +430,7 @@ regenerated by `python3 tools/list_estimates.py` (`--measure-only` for the short
 | `drone.yaml` | `station_keeping.setpoint_rate_hz` | 20.0 | ESTIMATE | MAVSDK offboard rate |
 | `drone.yaml` | `station_keeping.slow_push.axis` | [0.0, 1.0, 0.0] | ESTIMATE | sideways = +y (image horizontal) |
 | `drone.yaml` | `station_keeping.gnss_wander.tau_s` | 10.0 | ESTIMATE |  |
-| `drone.yaml` | `mavsdk.system_address` | "udp://:14540" | ESTIMATE | PX4 SITL default offboard link |
+| `drone.yaml` | `mavsdk.system_address` | "udpin://0.0.0.0:14540" | ESTIMATE | PX4 SITL default offboard link |
 | `beacon.yaml` | `red_led.emissive_rgb_full` | [1.0, 0.05, 0.02] | ESTIMATE | emissive colour at 100% (tune so the rendered core is just below 255 at gain 1) |
 | `beacon.yaml` | `red_led.diffuse_rgb` | [0.9, 0.85, 0.8] | ESTIMATE | ping-pong-ball white plastic |
 | `beacon.yaml` | `red_led.modulation.phase_s` | 0.0 | ESTIMATE |  |
@@ -394,10 +510,18 @@ regenerated by `python3 tools/list_estimates.py` (`--measure-only` for the short
 | `gimbal_storm32.yaml` | `joint_control.cmd_max` | 100.0 | ESTIMATE | rad/s velocity clamp (well above the 120 deg/s emulated rate limit) |
 | `gimbal_storm32.yaml` | `real_hardware.serial_port` | /dev/ttyUSB0 | MEASURE |  |
 | `gimbal_storm32.yaml` | `real_hardware.mavlink_system_id` | 255 | ESTIMATE | laptop as a GCS |
-| `lighting.yaml` | `ceiling_panels.positions_m` | [[1.0, -1.2, 2.9], [1.0, 1.2, 2.9], [4.0, -1.2, 2.9], [4.0, 1.2, 2.9]] | ESTIMATE |  |
+| `lighting.yaml` | `mains.update_rate_hz` | 250.0 | ESTIMATE | spec asks 1000 (one per step); a light_config call takes ~0.4 ms and 4 panels x 1 kHz is out of reach. 250 Hz > 2 x 120 Hz flicker |
+| `lighting.yaml` | `ceiling_panels.positions_m` | [[1.5, 0.0, 2.9], [4.0, 0.0, 2.9]] | ESTIMATE | 2 panels (not 4): each flicker update is a light_config call |
 | `lighting.yaml` | `ceiling_panels.diffuse` | [0.9, 0.9, 0.85] | ESTIMATE |  |
-| `lighting.yaml` | `ceiling_panels.intensity` | 1.0 | ESTIMATE |  |
+| `lighting.yaml` | `ceiling_panels.intensity` | 1.6 | ESTIMATE | (2 panels carry the light of 4) |
 | `lighting.yaml` | `ceiling_panels.attenuation_range_m` | 8.0 | ESTIMATE |  |
+| `lighting.yaml` | `ceiling_panels.attenuation` | {constant: 0.5, linear: 0.05, quadratic: 0.01} | ESTIMATE |  |
+| `lighting.yaml` | `ceiling_panels.specular` | [0.1, 0.1, 0.1] | ESTIMATE |  |
+| `lighting.yaml` | `ambient_fill.directions` | [[0.05, 0.05, -1.0], [1.0, 0.1, -0.2]] | ESTIMATE | down, and from behind the camera |
+| `lighting.yaml` | `spot_defaults.range_m` | 20.0 | ESTIMATE |  |
+| `lighting.yaml` | `spot_defaults.attenuation` | {constant: 0.2, linear: 0.02, quadratic: 0.005} | ESTIMATE |  |
+| `lighting.yaml` | `spot_defaults.falloff` | 1.0 | ESTIMATE |  |
+| `lighting.yaml` | `spot_defaults.specular` | [0.5, 0.5, 0.5] | ESTIMATE |  |
 | `lighting.yaml` | `scenarios.office_50hz.ambient` | 0.25 | ESTIMATE |  |
 | `lighting.yaml` | `scenarios.office_60hz.ambient` | 0.25 | ESTIMATE |  |
 | `lighting.yaml` | `scenarios.bright_lamp.ambient` | 0.25 | ESTIMATE |  |
@@ -421,19 +545,6 @@ regenerated by `python3 tools/list_estimates.py` (`--measure-only` for the short
 | `lighting.yaml` | `distractors.blinking_red_indicator.position_m` | [2.6, -0.7, 0.9] | ESTIMATE |  |
 | `lighting.yaml` | `distractors.blinking_red_indicator.emissive_rgb` | [1.0, 0.02, 0.0] | ESTIMATE |  |
 | `lighting.yaml` | `distractors.blinking_red_indicator.diameter_m` | 0.01 | ESTIMATE |  |
-| `photodiode.yaml` | `receiver.focal_length_m` | 0.025 | ESTIMATE | -> FOV ~ 2*atan(1.35/25) ~ 6.2 deg |
-| `photodiode.yaml` | `receiver.pinhole.fov_full_angle_mrad` | 6.0 | ESTIMATE |  |
-| `photodiode.yaml` | `receiver.mount_offset_m` | [0.0, 0.06, 0.0] | ESTIMATE | beside the camera (camera frame: x forward, y left, z up) |
-| `photodiode.yaml` | `background.dark` | 1.0e-8 | ESTIMATE | (940 nm filter passes little room light) |
-| `photodiode.yaml` | `background.office_50hz` | 2.0e-7 | ESTIMATE |  |
-| `photodiode.yaml` | `background.office_60hz` | 2.0e-7 | ESTIMATE |  |
-| `photodiode.yaml` | `background.bright_lamp` | 3.0e-6 | ESTIMATE | incandescent-ish lamp is IR-rich |
-| `photodiode.yaml` | `background.window` | 1.0e-5 | ESTIMATE | sunlight |
-| `photodiode.yaml` | `background.distractors` | 2.0e-7 | ESTIMATE |  |
-| `photodiode.yaml` | `noise.bandwidth_hz` | 50000.0 | ESTIMATE | amplifier bandwidth |
-| `photodiode.yaml` | `noise.amplifier_current_noise_a_per_rthz` | 2.0e-12 | ESTIMATE | TIA input-referred |
-| `photodiode.yaml` | `test_link.bit_rate_bps` | 10000.0 | ESTIMATE | OOK test pattern -> 10 bits per 1 ms frame |
-| `photodiode.yaml` | `test_link.threshold` | midpoint | ESTIMATE | ideal threshold between 0 and 1 levels |
 | `bus.yaml` | `internal_ports.gimbal_state` | 5570 | ESTIMATE | Storm32GimbalSim readback (server in the bridge host -> GimbalIO clients) |
 | `bus.yaml` | `internal_ports.gimbal_cmd` | 5573 | ESTIMATE | GimbalIO clients -> Storm32GimbalSim set_target |
 | `bus.yaml` | `internal_ports.frames_meta` | 5571 | ESTIMATE | frame-source metadata for frames_meta.csv |
@@ -447,10 +558,10 @@ regenerated by `python3 tools/list_estimates.py` (`--measure-only` for the short
 config/        every number (tagged)            models/, worlds/  generated SDF (tools/world_builder.py)
 sim_bridge/    everything that touches Gazebo   px4/              airframe 4099_gz_mini2se + installer
 telemetry/     schema, ZeroMQ bus, recorder     evaluation/       truth recorder, scorer, camera_truth.yaml
-tracking/      [OPEN]                           calibration/      [OPEN]
-sandbox/       [OPEN]                           scenarios/        T1-T7, calib_*, pendulum, mission, test support
+tracking/      acquisition, tracking, pointing  calibration/      preflight brightness (rest still OPEN)
+sandbox/       error budget, decoys, Eve, BB84  scenarios/        T1-T7, calib_*, pendulum, mission, test support
 tools/         run_scenario, world_builder, view_camera, mjpeg_server, make_tag_texture, compute_inertia,
-               port_guard, list_estimates, scenario
+               port_guard, list_estimates, scenario, make_dashboard, live_dashboard, tune, eve_toggle
 qkd.py         the launcher (qkd.cmd on Windows, ./qkd on Linux/macOS)
 tests/         offline + simulator acceptance tests
 docker/        Dockerfile, run.sh

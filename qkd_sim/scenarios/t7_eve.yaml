@@ -1,6 +1,12 @@
-# T7 Eve: fan low, 3 min hover. Eve is toggled from the sandbox operator UI (port 5560).
+# T7 Eve: fan low, 3 min hover. The operator's Eve toggles (port 5560) are scheduled here; tools/eve_toggle.py
+# sends the same messages by hand.
+#   0-60 s     no attack: keys
+#   60-90 s    intercept-resend on half the pulses: QBER ~14.5%, the gate aborts every block, the tracker re-acquires
+#   90-120 s   off again: keys return
+#   120-150 s  photon-number splitting: QBER stays low, the decoy check aborts
+#   150-180 s  off
 test: T7
-description: Fan low, 3 min hover for the Eve toggle test.
+description: Fan low, 3 min hover; Eve intercept-resend 60-90 s and PNS 120-150 s (port 5560).
 world: qkd_lab
 rigs: [rig_fixed, rig_gimbal]
 payload: red_led_beacon
@@ -11,3 +17,9 @@ duration_s: 180
 drone: {enabled: true, wander: true}
 fan: {schedule: [{t_s: 0, level: low}]}
 lighting: {initial: office_50hz}
+eve:
+  schedule:
+    - {t_s: 60, mode: intercept_resend, fraction: 0.5}
+    - {t_s: 90, mode: "off"}
+    - {t_s: 120, mode: pns}
+    - {t_s: 150, mode: "off"}

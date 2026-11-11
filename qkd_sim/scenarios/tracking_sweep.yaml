@@ -1,0 +1,41 @@
+# Controlled tracking test: the drone flies a scripted path (no random wander, fan off) so the tracker's
+# accuracy can be measured against known motion, segment by segment:
+#     python tools/tracker_accuracy.py            (per-segment table for the latest run)
+# Offsets are relative to the hover station (3, 0, 1.2) m: +x away from the camera, +y to the camera's left, +z up.
+# At 3 m: 1 m/s sideways = ~333 mrad/s = ~8 px per frame at 30 fps.
+test: tracking
+description: Scripted holds, steps, sweeps of rising speed, a figure-8 and range changes to measure tracking accuracy.
+world: qkd_lab
+rigs: [rig_fixed, rig_gimbal]
+payload: red_led_beacon
+target: red_led
+fidelity: fast
+seed: 1201
+duration_s: 135
+drone:
+  enabled: true
+  wander: false
+  path:
+    - {name: hold_start,      type: hold, duration_s: 5}
+    - {name: step_left_30cm,  type: step, offset_m: [0.0, 0.3, 0.0], duration_s: 4}
+    - {name: step_back,       type: step, offset_m: [0.0, 0.0, 0.0], duration_s: 4}
+    - {name: step_up_20cm,    type: step, offset_m: [0.0, 0.0, 0.2], duration_s: 4}
+    - {name: step_down,       type: step, offset_m: [0.0, 0.0, 0.0], duration_s: 4}
+    - {name: sweep_0.2mps,    type: sine, amplitude_m: [0.0, 0.6, 0.0], freq_hz: [0.0, 0.05, 0.0], duration_s: 20}
+    - {name: sweep_0.45mps,   type: sine, amplitude_m: [0.0, 0.6, 0.0], freq_hz: [0.0, 0.12, 0.0], duration_s: 16.667}
+    - {name: sweep_0.95mps,   type: sine, amplitude_m: [0.0, 0.6, 0.0], freq_hz: [0.0, 0.25, 0.0], duration_s: 12}
+    - {name: sweep_1.5mps,    type: sine, amplitude_m: [0.0, 0.6, 0.0], freq_hz: [0.0, 0.40, 0.0], duration_s: 10}
+    - {name: figure_8,        type: sine, amplitude_m: [0.0, 0.5, 0.25], freq_hz: [0.0, 0.15, 0.30], duration_s: 13.333}
+    - {name: hold_mid,        type: hold, duration_s: 3}
+    - {name: move_in_to_2m,   type: move, to_m: [-1.0, 0.0, 0.0], speed_mps: 0.25}
+    - {name: hold_at_2m,      type: hold, duration_s: 3}
+    - {name: move_out_to_4m,  type: move, to_m: [1.0, 0.0, 0.0], speed_mps: 0.25}
+    - {name: hold_at_4m,      type: hold, duration_s: 3}
+    - {name: move_back_to_3m, type: move, to_m: [0.0, 0.0, 0.0], speed_mps: 0.25}
+    - {name: hold_end,        type: hold, duration_s: 3}
+fan: {schedule: [{t_s: 0, level: "off"}]}
+lighting: {initial: office_50hz}
+overrides:
+  drone:
+    simple_flight:
+      position_bandwidth_hz: 1.0        # follow the scripted path closely (vision hold is ~0.25 Hz)

@@ -1,34 +1,94 @@
-# [OPEN] Tracking configuration. Keys only; the team fills in values.
+# Tracking configuration. Ported from the team's src/ tracker (lock-in detector, Kalman filter, virtual mount,
+# drift / jitter / residual measures) and retuned for the Action 5 Pro: 1920x1080 at 30 fps, the active lens of
+# camera_action5.yaml (rectilinear 104 deg by default, or the 140 deg fisheye), 150 ms latency, auto-exposure,
+# MJPG, a 15 mm-apparent bare red LED (steady by default, 7 Hz blink as the option). Every value is a starting
+# point: retune on `qkd run t1` / `t3`.
 acquire:
-  lockin_frequency_hz: null
-  lockin_window_frames: null
-  red_channel_threshold: null
-  aruco_dictionary: null
-  aruco_id: null
-  min_confidence: null
+  # red_led | tag | auto (LED, with a full-frame ArUco search every aruco_every_n_frames: costly at 1920x1080).
+  # tools/run_scenario.py passes the scenario's target with `tracking.main --target`.
+  target: red_led
+  # blink: 7 Hz lock-in (rejects lamps, windows, mains flicker). steady: small red spot that stays lit (src/
+  # --beacon steady, plus a persistence test). auto: follow beacon.yaml red_led.modulation.enabled.
+  beacon: auto
+  search_zone: null                     # [x0, y0, x1, y1] as 0-1 fractions of the frame: only look for the beacon here
+  # Steady mode. A Gazebo render of the LED at 3 m (before AE) is pale pink: core BGR ~(172, 182, 238), R - max(G, B)
+  # ~56. AE (gain ~0.5 in office light) and MJPG's halved chroma resolution on a 4 px spot leave ~15-40.
+  steady_channel: red_excess            # red_excess (R - max(G, B): white glints / panels don't count) | red
+  steady_min_contrast: 8.0              # ESTIMATE grey levels of that channel above the background (blue-grey room ~0)
+  steady_proc_width_px: 0               # 0 = full resolution: downscaling dilutes a 4 px spot below the threshold
+  steady_min_area_px: 1                 # ESTIMATE core size range, full-resolution pixels
+  # The LED's core is ~10-20 px at 3 m, the 6 cm steady red lamp's ~100. 50 rejects the lamp at hover range but
+  # also the LED closer than ~1.5 m (T1's 1 m pass): raise it there (and set search_zone).
+  steady_max_area_px: 50                # ESTIMATE
+  steady_persist_frames: 15             # ESTIMATE a spot must stay lit 0.5 s: the 2 Hz red indicator (0.25 s on) never does
+  lockin_frequency_hz: 7.0              # SPEC beacon.yaml modulation (beacon: auto takes it from beacon.yaml)
+  # 20 frames = 0.667 s = 2 cycles of the 3 Hz gap between 7 Hz and the 10 Hz alias of 100 Hz mains flicker,
+  # so that alias (and the 0 Hz alias of 120 Hz) cancels exactly. 4.7 beacon periods.
+  lockin_window_frames: 20              # ESTIMATE
+  red_channel_threshold: 12.0           # ESTIMATE min 7 Hz lock-in amplitude (linear-light red, 0-255 scale) for the beacon
+  rel_threshold: 0.5                    # ESTIMATE blob = pixels above this fraction of the peak amplitude
+  proc_width_px: 960                    # ESTIMATE full-frame lock-in runs on a downscaled red channel (cost)
+  aruco_dictionary: DICT_4X4_50         # SPEC beacon.yaml tag
+  aruco_id: 0                           # SPEC
+  aruco_every_n_frames: 5               # ESTIMATE full-frame ArUco search cadence while searching (target tag / auto)
+  min_confidence: 0.5                   # ESTIMATE confidence = amp / (amp + threshold): 0.5 at the threshold
 track:
-  roi_size_px: null
-  saturation_level: null
-  rolling_shutter_readout_s: null
+  roi_size_px: 160                      # ESTIMATE full-resolution ROI side around the prediction (~ +-100 mrad)
+  lockin_confirm_fraction: 0.5          # ESTIMATE ROI confirmation threshold = this x red_channel_threshold (the window
+                                        #   refills slowly after a dropout; inside the ROI the position is already known)
+  refine_search_px: 16                  # ESTIMATE radius searched for the brightest point near the lock-in spot
+  refine_centroid_px: 8                 # ESTIMATE radius of the brightness-weighted centroid
+  min_contrast: 12.0                    # ESTIMATE red grey levels above the local median (no-redness fallback)
+  confirmed_min_contrast: 4.0           # ESTIMATE blink: redness contrast once the lock-in has confirmed the ROI
+                                        #   (catches the 40% phase on the dark drone body under bright-office AE)
+  saturation_level: 250                 # ESTIMATE the camera clips at 255
+  rolling_shutter_readout_s: 0.015      # ESTIMATE used until calibration.yaml rolling_shutter.readout_s exists
+  # The exposure gain is not reported by the camera; it is estimated by replaying an auto-exposure law on the
+  # observed frame means (track.ExposureEstimator). Identify these on the real camera (step the room light).
+  exposure_model:
+    mode: auto                          # auto | locked
+    target_mean: 0.45                   # ESTIMATE mean brightness the AE holds
+    tau_s: 0.5                          # ESTIMATE AE loop time constant
+    gamma: 2.2                          # SPEC sRGB-like encoding (also used to linearise the red channel)
+    gain_min: 0.125                     # ESTIMATE
+    gain_max: 16.0                      # ESTIMATE
+    gain_initial: 1.0                   # ESTIMATE the gain is relative to this starting value
 kalman:
-  process_noise_rad2_per_s3: null
-  measurement_noise_rad: null
-  mahalanobis_gate: null
+  process_noise_rad2_per_s3: 0.01       # ESTIMATE (0.1 rad/s^2)^2 white acceleration (src/ used 0.16 at 120 fps; at 30 fps with 150 ms
+                                        #   latency that makes the velocity lead amplify noise: residual 4.0 -> 3.0 mrad offline)
+  measurement_noise_rad: 0.001          # ESTIMATE ~0.8 px centroid noise at 1.27 mrad/px (drone body behind the LED)
+  mahalanobis_gate: 6.0                 # ESTIMATE sigma; a farther measurement is rejected (not the beacon)
+  coast_velocity_tau_s: 0.1             # ESTIMATE velocity decays while coasting (don't extrapolate far on a guess)
 pointing:
-  mode_rig_fixed: null                  # fixed_boresight | virtual_receiver
-  virtual_receiver_lag_s: null
-  feedforward_gain: null
-  pi_kp: null
-  pi_ki: null
-  command_rate_hz: null
+  mode_rig_fixed: virtual_receiver      # fixed_boresight | virtual_receiver (software mount, src/ --virtual-mount)
+  virtual_receiver_lag_s: 0.03          # ESTIMATE servo loop of the modelled mount, added to the frame latency
+  virtual_receiver_gain_per_s: 25.0     # ESTIMATE first-order servo bandwidth (src/ SimGimbal)
+  virtual_receiver_max_rate_rad_s: 2.5  # ESTIMATE slew limit
+  virtual_receiver_step_rad: 0.0        # ESTIMATE step quantisation (0 = brushless; 0.00153 = 4096-step servo)
+  feedforward_gain: 1.0                 # ESTIMATE velocity lead x (frame latency + command latency)
+  pi_kp: 0.0                            # ESTIMATE on the measured image offset (rad / rad)
+  pi_ki: 0.5                            # ESTIMATE 1/s; removes a steady readback / alignment bias
+  integrator_limit_rad: 0.01            # ESTIMATE anti-windup
+  command_rate_hz: 50.0                 # SPEC gimbal_storm32.yaml command.max_rate_hz
+  command_latency_s: 0.02               # ESTIMATE gimbal serial + controller latency (lead term)
+  gimbal_servo_lag_s: 0.037             # ESTIMATE velocity lag of the gimbal loop (2 zeta / wn at 6 Hz, 0.7; lead term)
 state_machine:
-  acquire_frames: null
-  coast_timeout_s: null
-  lost_timeout_s: null
+  acquire_frames: 4                     # ESTIMATE consecutive detections SEARCH -> ACQUIRE -> TRACK
+  coast_timeout_s: 0.6                  # ESTIMATE COAST on the prediction this long, then SEARCH
+  lost_timeout_s: 5.0                   # ESTIMATE rig_gimbal: after this long in SEARCH the gimbal returns home
 motion_estimate:
-  drift_window_s: null
-  jitter_window_s: null
+  drift_window_s: 0.32                  # ESTIMATE low-pass time constant: drift below ~0.5 Hz, jitter above
+  jitter_window_s: 1.0                  # ESTIMATE RMS window of the high-passed direction
+  boresight_settle_s: 1.0               # ESTIMATE skip this long after the first lock, then slide a window of
+  boresight_window_s: 3.0               # ESTIMATE  this length and fix the boresight / brightness reference on the
+  boresight_max_trend_mrad: 30.0        # ESTIMATE  first one whose halves differ by less than this (hovering, not
+                                        #   climbing: the sim drone takes off at t = 0, rising ~100 mrad/s)
+  boresight_follow_tau_s: 30.0          # ESTIMATE then follow the long-run hover mean this slowly (0 = keep it fixed).
+                                        #   Gazebo t5: fixed on the take-off overshoot, drift read 65 mrad vs 29 true; following: 40
+  reference_range_m: 3.0                # ESTIMATE hover-station range: a preflight i_cal taken at range_m is scaled by (range_m / this)^2
 pose:
-  tag_size_m: null
+  tag_size_m: 0.08                      # SPEC beacon.yaml tag outer_edge_m
+  every_n_frames: 3                     # ESTIMATE
+  max_age_s: 1.0                        # ESTIMATE lean / range go back to null this long after the last tag pose
 telemetry_out:
-  publish_rate: null
+  publish_rate: per_frame               # one record per camera frame

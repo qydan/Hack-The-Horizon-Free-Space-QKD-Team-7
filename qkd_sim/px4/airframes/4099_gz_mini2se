@@ -79,3 +79,6 @@ param set-default NAV_RCL_ACT 0
 param set-default NAV_DLL_ACT 0
 param set-default COM_RCL_EXCEPT 4
 param set-default COM_OF_LOSS_T 2.0
+# Simulated ESCs confirm arming late when the sim runs slowly; the ESC arming failure detector then disarms
+# the vehicle 0.3 s after arming (seen in testing). It is meaningless in simulation.
+param set-default FD_ESCS_EN 0

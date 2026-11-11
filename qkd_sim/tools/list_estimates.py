@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = ("world", "drone", "beacon", "fan", "camera_action5", "rigs", "gimbal_storm32", "lighting", "photodiode", "bus")
+FILES = ("world", "drone", "beacon", "fan", "camera_action5", "rigs", "gimbal_storm32", "lighting", "bus")
 
 
 def rows(measure_only: bool = False) -> list[str]:

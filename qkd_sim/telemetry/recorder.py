@@ -6,7 +6,7 @@ evaluation/truth_recorder.py.
 
     python -m telemetry.recorder --out runs/<id> [--duration 60]
 
-Files: <name>.jsonl for every stream, telemetry.csv, photodiode.csv and frames_meta.csv (seq, t_capture,
+Files: <name>.jsonl for every stream, telemetry.csv and frames_meta.csv (seq, t_capture,
 t_delivered, exposure_gain, saturated).
 """
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any
 
 from telemetry.bus import bus_config
 
-CSV_STREAMS = {"telemetry", "photodiode", "frames_meta"}
+CSV_STREAMS = {"telemetry", "frames_meta"}
 
 
 class Recorder:
@@ -33,7 +33,7 @@ class Recorder:
         ctx = zmq.Context.instance()
         self.poller = zmq.Poller()
         self.socks: dict[Any, str] = {}
-        for name in ports if ports is not None else ["telemetry", "abort", "photodiode", "keys", "eve"]:
+        for name in ports if ports is not None else ["telemetry", "abort", "keys", "eve"]:
             s = ctx.socket(zmq.SUB)
             s.connect(f"tcp://{cfg['host']}:{cfg['ports'][name]}")
             s.setsockopt(zmq.SUBSCRIBE, b"")

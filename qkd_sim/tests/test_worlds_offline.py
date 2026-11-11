@@ -1,5 +1,5 @@
 """Offline checks of the generated assets: every scenario builds a valid world for each of its rigs (A14
-build half), the drone model matches the spec mass split, A10 IR-cut rejection, config tagging."""
+build half), the drone model matches the spec mass split, A10 visible-beacon rejection, config tagging."""
 from __future__ import annotations
 
 import re
@@ -36,7 +36,7 @@ def test_a14_scenarios_build_for_each_rig(path):
 
 
 def test_a10_ir_cut_rejected():
-    with pytest.raises(ScenarioError, match="IR-cut"):
+    with pytest.raises(ScenarioError, match="RGB camera"):
         load_scenario("test_a10_ir_beacon")
 
 
@@ -70,7 +70,7 @@ def test_config_values_are_tagged():
     line or on its parent key's line (lists and grouped dicts)."""
     untagged = []
     for name in ("world", "drone", "beacon", "fan", "camera_action5", "rigs", "gimbal_storm32", "lighting",
-                 "photodiode", "bus"):
+                 "bus"):
         lines = (ROOT / "config" / f"{name}.yaml").read_text().splitlines()
         for i, line in enumerate(lines):
             code = line.split("#", 1)[0]

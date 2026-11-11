@@ -37,7 +37,7 @@ DEFAULTS: dict[str, Any] = {
     "pose_tracks": {},
     "gimbal": {"command_schedule": [], "active_schedule": []},
     "beacon_events": [],
-    "photodiode": {"enabled": False},
+    "eve": {"schedule": []},               # operator Eve toggles on 5560: [{t_s, mode, fraction?}]
     "recorders": {"telemetry": True, "truth": True, "frames_meta": True, "gz_log": False},
     "overrides": {},
 }
@@ -111,13 +111,13 @@ def validate(scn: dict[str, Any], cfgs: dict[str, dict[str, Any]]) -> None:
         raise ScenarioError(f"unknown target {scn['target']!r}")
     if scn["target"] == "tag" and scn["payload"] not in ("tag",) and scn["drone"]["enabled"]:
         raise ScenarioError("target 'tag' needs payload 'tag'")
-    # IR-cut validation (A10): the Action 5 Pro cannot see near-IR targets.
+    # Visible-beacon validation (A10): the Action 5 Pro is an RGB camera with an IR-cut filter; no IR targets.
     wl = scn["beacon_wavelength_nm"] or cfgs["beacon"]["red_led"]["wavelength_nm"]
     lo, hi = cfgs["camera_action5"]["sensor_spec"]["passband_nm"]
     if cfgs["camera_action5"]["sensor_spec"].get("ir_cut_filter") and not (lo <= float(wl) <= hi):
         raise ScenarioError(
-            f"beacon wavelength {wl} nm is outside the Osmo Action 5 Pro passband {lo}-{hi} nm: the camera has a "
-            f"built-in IR-cut filter, so an {wl} nm beacon is invisible to it. Use the ~630 nm red LED beacon or the "
+            f"beacon wavelength {wl} nm is outside the Osmo Action 5 Pro passband {lo}-{hi} nm: it is an RGB camera "
+            f"with a built-in IR-cut filter, so an {wl} nm beacon is invisible to it. Use the ~630 nm red LED beacon or the "
             f"ArUco tag with the ring light.")
     levels = cfgs["fan"]["levels_mps"]
     for item in scn["fan"]["schedule"]:
@@ -132,10 +132,23 @@ def validate(scn: dict[str, Any], cfgs: dict[str, dict[str, Any]]) -> None:
         raise ScenarioError(f"fidelity must be 'full' or 'fast', got {fid!r}")
     if scn["gimbal"]["command_schedule"] and scn["rigs"] != ["rig_gimbal"]:
         raise ScenarioError("a gimbal command_schedule needs rigs: [rig_gimbal]")
+    if scn["drone"].get("path"):
+        from sim_bridge.flight_path import validate as validate_path
+        try:
+            validate_path(scn["drone"]["path"])
+        except ValueError as exc:
+            raise ScenarioError(f"drone.path: {exc}") from None
+        if cfgs["drone"].get("flight_model", "px4") != "simple":
+            raise ScenarioError("drone.path needs drone.yaml flight_model: simple")
     if scn["world"] == "qkd_pendulum" and scn["drone"]["enabled"]:
         raise ScenarioError("the pendulum world has no drone: set drone.enabled: false")
     if float(scn["duration_s"]) <= 0:
         raise ScenarioError("duration_s must be positive")
+    for item in scn["eve"]["schedule"]:
+        if item.get("mode") not in ("off", "intercept_resend", "pns"):
+            raise ScenarioError(f"unknown Eve mode {item.get('mode')!r}; expected off, intercept_resend or pns")
+        if not 0.0 <= float(item.get("fraction", 0.5)) <= 1.0:
+            raise ScenarioError("Eve intercept fraction must be in 0..1")
 
 
 def load_scenario(name_or_path: str, cfgs: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:

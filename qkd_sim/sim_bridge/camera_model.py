@@ -68,6 +68,7 @@ class EquidistantLens:
         """cv2.fisheye with D = 0 is exactly the equidistant model r = f * theta."""
         return {
             "model": "cv2.fisheye (equidistant, D = 0)",
+            "projection": "equidistant",
             "image_size_px": [self.width, self.height],
             "K": self.K(),
             "D": [0.0, 0.0, 0.0, 0.0],
@@ -77,6 +78,88 @@ class EquidistantLens:
             "ifov_mrad_per_px_centre": 1e3 * self.ifov_rad,
             "principal_point_offset_px": list(self.pp_offset_px),
         }
+
+
+@dataclass(frozen=True)
+class RectilinearLens:
+    """Pinhole (rectilinear) lens: the Action 5 Pro's dewarped modes. r = f tan(theta), f = (W/2) / tan(HFOV/2)."""
+    width: int
+    height: int
+    hfov_rad: float
+    pp_offset_px: tuple[float, float] = (0.0, 0.0)
+
+    @classmethod
+    def from_cfg(cls, cam: dict[str, Any], pp_offset_px=(0.0, 0.0)) -> "RectilinearLens":
+        return cls(int(cam["stream"]["width_px"]), int(cam["stream"]["height_px"]),
+                   math.radians(float(cam["lens"]["hfov_deg"])), tuple(map(float, pp_offset_px)))
+
+    @property
+    def f_px(self) -> float:
+        return (self.width / 2.0) / math.tan(self.hfov_rad / 2.0)
+
+    @property
+    def cx(self) -> float:
+        return (self.width - 1) / 2.0 + self.pp_offset_px[0]
+
+    @property
+    def cy(self) -> float:
+        return (self.height - 1) / 2.0 + self.pp_offset_px[1]
+
+    @property
+    def vfov_rad(self) -> float:
+        return 2.0 * math.atan((self.height / 2.0) / self.f_px)
+
+    @property
+    def ifov_rad(self) -> float:
+        return 1.0 / self.f_px
+
+    def project(self, dirs_cam: np.ndarray) -> np.ndarray:
+        d = np.atleast_2d(np.asarray(dirs_cam, float))
+        z = np.where(d[:, 2] > 1e-9, d[:, 2], np.nan)          # behind the camera -> NaN
+        return np.stack([self.cx + self.f_px * d[:, 0] / z, self.cy + self.f_px * d[:, 1] / z], axis=1)
+
+    def unproject(self, uv: np.ndarray) -> np.ndarray:
+        uv = np.atleast_2d(np.asarray(uv, float))
+        v = np.stack([(uv[:, 0] - self.cx) / self.f_px, (uv[:, 1] - self.cy) / self.f_px, np.ones(len(uv))], axis=1)
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    def K(self) -> list[list[float]]:
+        return [[self.f_px, 0.0, self.cx], [0.0, self.f_px, self.cy], [0.0, 0.0, 1.0]]
+
+    def truth_dict(self) -> dict[str, Any]:
+        return {
+            "model": "pinhole (rectilinear), cv2 standard model with D = 0",
+            "projection": "rectilinear",
+            "image_size_px": [self.width, self.height],
+            "K": self.K(),
+            "D": [0.0, 0.0, 0.0, 0.0, 0.0],
+            "f_px": self.f_px,
+            "hfov_deg": math.degrees(self.hfov_rad),
+            "vfov_deg": math.degrees(self.vfov_rad),
+            "ifov_mrad_per_px_centre": 1e3 * self.ifov_rad,
+            "principal_point_offset_px": list(self.pp_offset_px),
+        }
+
+
+def make_lens(cam: dict[str, Any], pp_offset_px=(0.0, 0.0)):
+    """The active lens from camera_action5.yaml: RectilinearLens (default) or EquidistantLens (fisheye option)."""
+    proj = cam["lens"]["projection"]
+    if proj == "rectilinear":
+        return RectilinearLens.from_cfg(cam, pp_offset_px)
+    if proj == "equidistant":
+        return EquidistantLens.from_cfg(cam, pp_offset_px)
+    raise ValueError(f"camera_action5.yaml lens.projection must be rectilinear or equidistant, got {proj!r}")
+
+
+def render_sensor_type(cam: dict[str, Any]) -> str:
+    """Resolve render.sensor_type 'auto' against the active lens."""
+    st = cam["render"]["sensor_type"]
+    proj = cam["lens"]["projection"]
+    if st == "auto":
+        return "camera" if proj == "rectilinear" else "wideanglecamera"
+    if proj == "rectilinear" and st != "camera":
+        raise ValueError(f"render.sensor_type {st!r} only applies to the equidistant fisheye; use auto")
+    return st
 
 
 def rectilinear_to_equidistant_maps(lens: EquidistantLens, rect_w: int, rect_h: int, rect_hfov_rad: float):

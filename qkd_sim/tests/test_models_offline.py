@@ -1,8 +1,8 @@
 """Offline acceptance checks on the pure models (no Gazebo needed).
 
 Covers the model side of A4 (jet + drag -> lean), A6 (modulation through the camera pipeline), A7 (rolling-shutter
-skew), A9 (auto-exposure), A10 (IR-cut validation), A11 (FixedMount), A12 (Storm32 emulation), A13 (schema),
-A15 (photodiode link budget). The same items are also checked end-to-end in Gazebo by test_sim.py.
+skew), A9 (auto-exposure), A10 (visible-beacon validation), A11 (FixedMount), A12 (Storm32 emulation),
+A13 (schema). The IR data link (A15) was removed: the rig is a red LED and an RGB camera. The same items are also checked end-to-end in Gazebo by test_sim.py.
 """
 from __future__ import annotations
 
@@ -15,14 +15,25 @@ from sim_bridge.beacon_modulator import Modulation
 from sim_bridge.fan_wind import FanJet, WindField, drag_force, schedule_level, steady_lean_deg
 from sim_bridge.gimbal_io import FixedMount, GimbalIO, Storm32GimbalSim
 from sim_bridge.image_pipeline import Action5Pipeline, AutoExposure, RollingShutterAssembler, SubFrame
-from sim_bridge.photodiode_sim import Detector, LinkBudget
 
 DEG = math.pi / 180
 
 
 # ------------------------------------------------------------------------------------------- beacon
-def test_modulation_square_wave(cfgs):
+def test_steady_is_default(cfgs):
+    """The real rig's LED is constantly lit: steady unless blink is switched on in beacon.yaml."""
     m = Modulation.from_cfg(cfgs["beacon"]["red_led"]["modulation"])
+    assert cfgs["beacon"]["red_led"]["modulation"]["enabled"] is False
+    assert {m.level(t) for t in np.arange(0, 2, 0.003)} == {m.high_level}
+    assert m.next_edge(0.5) == math.inf
+
+
+def _blink(cfgs):
+    return {**cfgs["beacon"]["red_led"]["modulation"], "enabled": True}
+
+
+def test_modulation_square_wave(cfgs):
+    m = Modulation.from_cfg(_blink(cfgs))
     t = np.arange(0, 10, 1e-4)
     lv = np.array([m.level(x) for x in t])
     assert set(np.round(lv, 6)) == {0.4, 1.0}
@@ -35,6 +46,26 @@ def test_modulation_square_wave(cfgs):
     e = m.next_edge(t0)
     assert m.level(e - 1e-6) != m.level(e + 1e-6)
     assert abs(e - 1 / 14) < 1e-9
+
+
+def test_bare_led_beam_pattern(cfgs):
+    """Bare LED (no diffuser): half brightness at the half-intensity angle, nothing from behind, and the
+    drone-attitude geometry turns a lean into dimming."""
+    from sim_bridge.beacon_modulator import BeamPattern, off_axis_angle
+    half = math.radians(cfgs["beacon"]["red_led"]["viewing_half_angle_deg"])
+    beam = BeamPattern(half)
+    assert beam.factor(0.0) == pytest.approx(1.0)
+    assert beam.factor(half) == pytest.approx(0.5, abs=1e-9)
+    assert beam.factor(math.radians(95)) == 0.0
+    # LED axis along body -x, camera straight behind: on axis; pitch the body 20 deg -> 20 deg off axis
+    cam = np.array([-3.0, 0.0, 0.0])
+    q0 = (1.0, 0.0, 0.0, 0.0)
+    assert off_axis_angle([0, 0, 0], q0, [0, 0, 0], [-1, 0, 0], cam) == pytest.approx(0.0, abs=1e-9)
+    a = math.radians(20) / 2
+    q_pitch = (math.cos(a), 0.0, math.sin(a), 0.0)
+    assert math.degrees(off_axis_angle([0, 0, 0], q_pitch, [0, 0, 0], [-1, 0, 0], cam)) == pytest.approx(20.0, abs=1e-6)
+    d = cfgs["beacon"]["red_led"]["drive"]
+    assert d["current_a"] * d["forward_voltage_red_v"] == pytest.approx(0.040)
 
 
 def test_7hz_clear_of_mains_aliases(cfgs):
@@ -96,6 +127,62 @@ def test_a4_predicted_lean_at_fan_high(cfgs):
     assert 6.0 < lean < 7.0
     lean_med = steady_lean_deg(4.0, cfgs["drone"]["aero"]["body_cd_area_m2"], 0.264)
     assert 3.0 < lean_med < 6.0
+
+
+def _fly(cfgs, fan, wander, seconds=90.0):
+    from sim_bridge.simple_flight import SimpleFlight
+    st = np.array(cfgs["world"]["hover_station_m"])
+    fl = SimpleFlight(cfgs["drone"], cfgs["fan"], cfgs["world"], np.array([st[0], st[1], 0.03]), st,
+                      fan_schedule=[{"t_s": 0, "level": "off"}, {"t_s": 20, "level": fan}], seed=1, wander=wander)
+    out = []
+    for k in range(int(seconds / 0.01) + 1):
+        fl.step(k * 0.01)
+        out.append((k * 0.01, fl.p.copy(), fl.lean_deg(), fl.last_wind.copy()))
+    return fl, out
+
+
+def test_simple_flight_takes_off_and_holds(cfgs):
+    """Default flight model (no PX4): climbs to the station and holds it."""
+    assert cfgs["drone"]["flight_model"] == "simple"
+    _, out = _fly(cfgs, "off", wander=False)
+    p = np.array([o[1] for o in out if o[0] > 30])
+    assert np.allclose(p.mean(0), cfgs["world"]["hover_station_m"], atol=0.01)
+    assert p.std(0).max() < 0.005
+
+
+def test_simple_flight_leans_into_fan(cfgs):
+    """Steady lean = atan(drag / weight) (within 15%, turbulence adds a little); pushed downwind, then recovers."""
+    fl, out = _fly(cfgs, "high", wander=False)
+    late = [o for o in out if o[0] > 60]
+    lean = np.mean([o[2] for o in late])
+    wind = abs(np.mean([o[3][1] for o in late]))
+    assert lean == pytest.approx(steady_lean_deg(wind, cfgs["drone"]["aero"]["body_cd_area_m2"], fl.mass), rel=0.15)
+    y = np.array([o[1][1] for o in out if 20 < o[0] < 40])
+    assert y.max() > 0.02                                        # blown +y when the fan comes on
+    assert abs(np.mean([o[1][1] for o in late])) < 0.5 * y.max()  # and recovers
+
+
+def test_hover_wander_stays_in_dji_envelope(cfgs):
+    """The wander setpoint never leaves DJI's +-0.3 m / +-0.1 m and keeps roughly the specified spread."""
+    from sim_bridge.hover_station import SetpointGenerator
+    mx_h, sd = [], []
+    for seed in range(40):
+        g = SetpointGenerator.from_cfg(cfgs["drone"], np.zeros(3), np.random.default_rng(seed), wander=True)
+        w = np.array([g.at(t) for t in np.arange(0, 75, 0.05)])
+        mx_h.append(np.hypot(w[:, 0], w[:, 1]).max())
+        assert np.abs(w[:, 2]).max() < 0.1
+        sd.append(w[:, 0].std())
+    assert max(mx_h) < 0.3
+    assert 0.05 < np.mean(sd) < 0.12
+
+
+def test_tilt_quaternion_matches_lean():
+    from sim_bridge.simple_flight import tilt_quaternion
+    from sim_bridge.truth_publisher import quat_to_rot
+    a = 9.81 * math.tan(math.radians(10))
+    R = quat_to_rot(tilt_quaternion([0.0, a], 0.0))
+    assert math.degrees(math.acos(R[2, 2])) == pytest.approx(10.0, abs=1e-6)
+    assert R[1, 2] > 0                                           # thrust tilted toward +y
 
 
 # ------------------------------------------------------------------------------------------- gimbal
@@ -246,7 +333,7 @@ def test_a6_modulation_through_pipeline(cfgs):
     """Beacon brightness follows the 7 Hz modulator; after the full pipeline (rolling shutter, AE, MJPG) the
     red channel at the beacon pixel has its FFT peak at 7.0 +- 0.2 Hz and a low/high ratio of 0.40 +- 0.05."""
     cam = cfgs["camera_action5"]
-    m = Modulation.from_cfg(cfgs["beacon"]["red_led"]["modulation"])
+    m = Modulation.from_cfg(_blink(cfgs))
     pipe = Action5Pipeline(cam, "full")
     rate = Action5Pipeline.required_render_rate_hz(cam, "full")
     rng = np.random.default_rng(0)
@@ -271,8 +358,8 @@ def test_a6_modulation_through_pipeline(cfgs):
 def test_a7_rolling_shutter_skew(cfgs):
     """Vertical bar moving sideways at 1 m/s at 3 m: centroid x vs row gives readout +-20%."""
     cam = cfgs["camera_action5"]
-    from sim_bridge.camera_model import EquidistantLens
-    lens = EquidistantLens.from_cfg(cam)
+    from sim_bridge.camera_model import make_lens
+    lens = make_lens(cam)
     v_px = 1.0 / 3.0 * lens.f_px                         # px/s near the image centre
     readout = cam["rolling_shutter"]["readout_s"]
     H, W = cam["stream"]["height_px"], cam["stream"]["width_px"]
@@ -340,42 +427,26 @@ def test_mjpg_roundtrip_shape(cfgs):
 
 
 def test_camera_model(cfgs):
-    from sim_bridge.camera_model import EquidistantLens, rectilinear_to_equidistant_maps
-    lens = EquidistantLens.from_cfg(cfgs["camera_action5"])
-    assert lens.f_px == pytest.approx(786, abs=1)
-    assert 1e3 * lens.ifov_rad == pytest.approx(1.27, abs=0.01)
-    assert math.degrees(lens.vfov_rad) == pytest.approx(79, abs=0.5)
+    """Default lens = the real rig's dewarped 104 deg rectilinear view; the 140 deg fisheye stays as an option."""
+    from sim_bridge.camera_model import (EquidistantLens, RectilinearLens, make_lens, rectilinear_to_equidistant_maps,
+                                         render_sensor_type)
+    cam = cfgs["camera_action5"]
+    lens = make_lens(cam)
+    assert isinstance(lens, RectilinearLens) and render_sensor_type(cam) == "camera"
+    assert lens.f_px == pytest.approx(960 / math.tan(math.radians(52)), rel=1e-9)        # ~750 px
+    assert 1e3 * lens.ifov_rad == pytest.approx(1.333, abs=0.01)
+    assert math.degrees(lens.vfov_rad) == pytest.approx(71.5, abs=0.5)
     d = lens.unproject(np.array([[100.0, 200.0], [1800.0, 900.0]]))
     assert np.allclose(lens.project(d), [[100, 200], [1800, 900]], atol=1e-6)
-    # 8 cm tag at 3 m spans ~21 px (README limit)
-    assert 0.08 / 3.0 * lens.f_px == pytest.approx(21, abs=1)
-    # coverage check (8.2): +-1 m at 3 m needs ~37 deg, well inside 140 deg
-    assert 2 * math.degrees(math.atan(1 / 3)) == pytest.approx(37, abs=0.5)
-    mx, _ = rectilinear_to_equidistant_maps(lens, 640, 360, math.radians(120))
+    assert 0.08 / 3.0 * lens.f_px == pytest.approx(20, abs=1)          # 8 cm tag at 3 m ~20 px (README limit)
+    assert 2 * math.degrees(math.atan(1 / 3)) < math.degrees(lens.hfov_rad)    # +-1 m at 3 m (37 deg) fits
+    # fisheye option
+    fish = {**cam, "lens": {**cam["lens"], "projection": "equidistant", "hfov_deg": 140.0}}
+    fl = make_lens(fish)
+    assert isinstance(fl, EquidistantLens) and render_sensor_type(fish) == "wideanglecamera"
+    assert fl.f_px == pytest.approx(786, abs=1)
+    mx, _ = rectilinear_to_equidistant_maps(fl, 640, 360, math.radians(120))
     assert (mx[540, :] < 0).any() and (mx[540, 960] > 0)        # 120 deg render leaves black edges at 140 deg
-
-
-# ------------------------------------------------------------------------------------------- photodiode
-def test_a15_photodiode_link_budget(cfgs):
-    link = LinkBudget.from_cfg(cfgs["photodiode"])
-    for item in cfgs["photodiode"]["sanity"]:
-        assert link.received_power(item["range_m"]) == pytest.approx(item["expected_w"], rel=0.30)
-    # lean outside the 10 deg beam kills the signal; soft edge in the last 10 %
-    assert link.received_power(5.0, tx_off_axis_rad=math.radians(6)) == 0.0
-    assert 0 < link.received_power(5.0, tx_off_axis_rad=math.radians(4.75)) < link.received_power(5.0)
-    det = Detector.from_cfg(cfgs["photodiode"], np.random.default_rng(0))
-    s, b, errs = det.measure(link.received_power(5.0), 2e-7)
-    assert s > 0 and errs == 0
-    _, _, errs_weak = det.measure(1e-12, 1e-5)
-    assert errs_weak > 0
-
-
-def test_pinhole_narrows_fov(cfgs):
-    from sim_bridge.config import deep_merge
-    c = deep_merge(cfgs["photodiode"], {"receiver": {"pinhole": {"enabled": True}}})
-    link = LinkBudget.from_cfg(c)
-    p0 = link.received_power(5.0)
-    assert link.received_power(5.0, rx_off_axis_rad=0.0029) < 0.5 * p0
 
 
 # ------------------------------------------------------------------------------------------- telemetry
@@ -389,7 +460,9 @@ def test_a13_schema():
         validate_telemetry(bad)
     with pytest.raises(TelemetryValidationError):
         validate_telemetry({**ex, "state": "LOCKED"})
-    validate_telemetry({**ex, "lean_deg": 4.2, "rx_signal": 3e-4, "rx_background": 2e-7})
+    validate_telemetry({**ex, "lean_deg": 4.2})
+    with pytest.raises(TelemetryValidationError):          # IR-link fields are gone
+        validate_telemetry({**ex, "rx_signal": 3e-4})
 
 
 def test_bus_roundtrip_and_truth_refusal():
@@ -414,7 +487,7 @@ def test_bus_roundtrip_and_truth_refusal():
 
 # ------------------------------------------------------------------------------------------- truth geometry
 def test_truth_geometry(cfgs):
-    from sim_bridge.camera_model import EquidistantLens, LINK_TO_OPTICAL, project_world_point
+    from sim_bridge.camera_model import LINK_TO_OPTICAL, make_lens, project_world_point
     from sim_bridge.truth_publisher import camera_rotation, compute_truth, lens_position, tx_axis_body
     rig = cfgs["rigs"]["rig_fixed"]
     st = cfgs["world"]["hover_station_m"]
@@ -429,7 +502,7 @@ def test_truth_geometry(cfgs):
     # nominal aim is at the station, so the boresight error is the mount error plus the beacon height offset
     assert rec["boresight_err_mrad"] < 30.0
     # pixel projection agrees with the boresight error sign convention (x right, y down)
-    lens = EquidistantLens.from_cfg(cfgs["camera_action5"])
+    lens = make_lens(cfgs["camera_action5"])
     uv = project_world_point(lens, lens0, camera_rotation("rig_fixed", rig, None), rec["beacon_pos_m"])
     assert np.sign(uv[0] - lens.cx) == np.sign(rec["boresight_err_x_mrad"])
     assert np.sign(uv[1] - lens.cy) == np.sign(rec["boresight_err_y_mrad"])

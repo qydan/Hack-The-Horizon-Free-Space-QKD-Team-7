@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +50,8 @@ class SetpointGenerator:
     push_distance_m: float = 0.0
     push_duration_s: float = 1.0
     push_axis: np.ndarray | None = None
+    limit_h: float | None = None      # soft limit of the wander (tanh), None = unlimited
+    limit_v: float | None = None
 
     def __post_init__(self) -> None:
         self.ou = OrnsteinUhlenbeck([self.sigma_h, self.sigma_h, self.sigma_v], self.tau_s, self.rng)
@@ -60,10 +63,13 @@ class SetpointGenerator:
         sk = drone["station_keeping"]
         w = sk["gnss_wander"] if gnss else sk["wander"]
         sp = sk["slow_push"]
+        lim = (not gnss) and bool(sk["wander"].get("limit_to_spec", False))
         return cls(np.asarray(station, float), sk["wander"]["enabled"] if wander is None else wander,
                    float(w["sigma_horizontal_m"]), float(w["sigma_vertical_m"]), float(w["tau_s"]), rng,
                    push_start_s, float(sp["distance_m"]), float(sp["duration_s"]),
-                   np.asarray(sp["axis"], float))
+                   np.asarray(sp["axis"], float),
+                   float(sk["wander"]["limit_horizontal_m"]) if lim else None,
+                   float(sk["wander"]["limit_vertical_m"]) if lim else None)
 
     def push_offset(self, t: float) -> np.ndarray:
         if self.push_start_s is None or t <= self.push_start_s:
@@ -76,7 +82,13 @@ class SetpointGenerator:
             if self._t is not None:
                 self.ou.step(t - self._t)
             self._t = t
-            wander = self.ou.x
+            wander = self.ou.x.copy()
+            if self.limit_h:                     # soft limit: unchanged for small offsets, never past the bound
+                r = float(np.hypot(wander[0], wander[1]))
+                if r > 1e-12:
+                    wander[:2] *= self.limit_h * math.tanh(r / self.limit_h) / r
+            if self.limit_v:
+                wander[2] = self.limit_v * math.tanh(wander[2] / self.limit_v)
         else:
             wander = np.zeros(3)
         return self.station + wander + self.push_offset(t)
@@ -117,24 +129,39 @@ async def run_station(drone_cfg: dict[str, Any], world_cfg: dict[str, Any], *, s
     # start offboard on the ground at the spawn point, then climb. PX4 can still refuse the first arm right
     # after boot (preflight checks settling), so retry for a while before giving up.
     from mavsdk.action import ActionError
+    try:   # also set at run time, so an image built before the airframe change behaves the same
+        await drone.param.set_param_int("FD_ESCS_EN", 0)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not set FD_ESCS_EN: %s", exc)
     ground = enu_to_ned(spawn, spawn)
-    await drone.offboard.set_position_ned(PositionNedYaw(*ground, yaw_ned))
-    for attempt in range(1, 31):
-        try:
-            await drone.action.arm()
-            break
-        except ActionError as err:
-            if attempt == 30:
-                raise
-            log.warning("arm attempt %d refused (%s); retrying", attempt, err._result.result)
-            await asyncio.sleep(1.0)
-    log.info("armed")
-    try:
-        await drone.offboard.start()
-    except OffboardError as err:
-        await drone.action.disarm()
-        raise RuntimeError(f"offboard start failed: {err._result.result}") from err
 
+    async def arm_and_start() -> None:
+        await drone.offboard.set_position_ned(PositionNedYaw(*ground, yaw_ned))
+        for attempt in range(1, 31):
+            try:
+                await drone.action.arm()
+                break
+            except ActionError as err:
+                if attempt == 30:
+                    raise
+                log.warning("arm attempt %d refused (%s); retrying", attempt, err._result.result)
+                await asyncio.sleep(1.0)
+        log.info("armed")
+        try:
+            await drone.offboard.start()
+        except OffboardError as err:
+            await drone.action.disarm()
+            raise RuntimeError(f"offboard start failed: {err._result.result}") from err
+
+    armed = {"v": True}
+
+    async def watch_armed() -> None:
+        async for a in drone.telemetry.armed():
+            armed["v"] = bool(a)
+
+    await arm_and_start()
+    asyncio.ensure_future(watch_armed())
+    rearms = 0
     t0 = world.sim_time
     climb_s = 4.0
     takeoff_target = np.array([spawn[0], spawn[1], float(sk["takeoff_alt_m"])])
@@ -144,6 +171,16 @@ async def run_station(drone_cfg: dict[str, Any], world_cfg: dict[str, Any], *, s
     while (end is None or world.sim_time < end) and not stop():
         world.wait_until(t_next)
         t = world.sim_time
+        if not armed["v"] and rearms < 5:
+            # PX4 disarmed us (a failsafe right after arming, or auto-disarm on the ground): arm again and redo
+            # the take-off from the start.
+            rearms += 1
+            log.warning("PX4 disarmed the drone at t=%.1f; re-arming (attempt %d)", t, rearms)
+            armed["v"] = True
+            await arm_and_start()
+            t0 = world.sim_time
+            t_next = t0
+            continue
         for t_s, xyz in station_schedule:
             if t >= t_s:
                 gen.station = np.asarray(xyz, float)

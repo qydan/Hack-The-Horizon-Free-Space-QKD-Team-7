@@ -1,9 +1,51 @@
-# [OPEN] Cyber sandbox configuration. Keys only; the team fills in values.
-mu: null
-eta_d: null
-p_dark: null
-e_opt: null
-theta_fov_virtual_mrad: null
-eta_geo_mode: null
-block_s: null
-abort_qber: null
+# Cyber sandbox configuration. Ported from the team's src/ pipeline (error_budget.py, channel.py, decoy.py,
+# qkd_core.py, key_pool.py, sandbox.py); see sandbox/__init__.py for the data flow.
+#
+#   eta  = eta_geo(range) * exp(-2 residual^2 / theta_fov^2) * eta_tx(lean + drift) * intensity
+#   QBER = (e_opt p_sig + p_dark / 2) / (p_sig + p_dark),   p_sig = 1 - exp(-mu eta eta_d)
+
+# ---- operating point (the eight keys of the original interface)
+mu: 0.5                                 # ESTIMATE signal mean photon number
+eta_d: 0.6                              # ESTIMATE detector efficiency
+p_dark: null                            # null = derive from on_axis_snr at cal_range_m (default_params in src/)
+e_opt: 0.02                             # ESTIMATE optical error (misalignment, imperfect polarisation)
+theta_fov_virtual_mrad: 10.0            # ESTIMATE virtual receiver half-width (1/e^2); narrow so a few mrad of residual costs signal
+eta_geo_mode: lens_over_spot            # lens_over_spot (range from telemetry) | fixed (always cal_range_m)
+block_s: 1.0                            # ESTIMATE seconds of telemetry per key block (the unit the gate decides on)
+abort_qber: 0.11                        # SPEC BB84 asymptotic bound
+
+# ---- error budget geometry
+on_axis_snr: 50.0                       # ESTIMATE on-axis signal / noise at cal_range_m -> about 3% QBER when locked (10 -> 6.4%)
+cal_range_m: 3.0                        # ESTIMATE range the preflight calibration was done at (the hover station)
+lens_diameter_m: 0.025                  # ESTIMATE receiver lens
+beam_full_angle_deg: 10.0               # ESTIMATE drone transmitter beam
+tx_half_width_mrad: 87.0                # ESTIMATE +-5 deg flat-topped transmitter beam (-3 dB edge)
+tx_flatness: 8                          # ESTIMATE higher = flatter top, sharper edge
+
+# ---- emulated source and timing
+pulse_rate_hz: 1.0e9                    # ESTIMATE emulated source rate (real links: 100 MHz - GHz)
+interval_s: 0.1                         # ESTIMATE live-trace step
+max_message_gap_s: 0.1                  # ESTIMATE a telemetry gap longer than this counts only this long (stale state)
+min_sifted_bits: 2000                   # ESTIMATE
+
+decoy:
+  nu: 0.1                               # ESTIMATE weak decoy mean photon number
+  p_signal: 0.7                         # ESTIMATE
+  p_decoy: 0.2                          # ESTIMATE (remainder vacuum)
+  k_sigma: 5.0                          # ESTIMATE statistical margin of the decoy bounds
+
+bb84:
+  key_bits: 256                         # SPEC final symmetric key length
+  cascade_passes: 4                     # ESTIMATE
+  tag_bits: 64                          # ESTIMATE key-confirmation hash bits (counted as leaked)
+  sample_fraction: 0.2                  # ESTIMATE sifted bits disclosed for the QBER estimate
+  eps_est: 1.0e-6                       # ESTIMATE finite-size QBER bound failure probability
+  eps_sec: 1.0e-9                       # ESTIMATE secrecy parameter
+
+pool:
+  enabled: false                        # pool accepted blocks before distilling (moderate QBER still yields keys)
+  max_bits: 400000                      # ESTIMATE
+
+eve:                                    # initial attack; the operator toggles it on port 5560 (tools/eve_toggle.py)
+  mode: "off"                           # off | intercept_resend | pns
+  intercept_fraction: 0.5               # ESTIMATE fraction of pulses intercepted in intercept_resend mode
