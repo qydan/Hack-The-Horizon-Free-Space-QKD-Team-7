@@ -413,13 +413,16 @@ class FrameTap:
 STATE_COLOURS = {FINE_TRACK: (0, 220, 0), COAST: (0, 220, 255), SEARCH: (0, 0, 255)}   # BGR
 
 
-def draw_overlay(frame: np.ndarray, tracker: "GroundTracker", msg: TelemetryMessage, fps: float) -> np.ndarray:
+def draw_overlay(frame: np.ndarray, tracker: "GroundTracker", msg: TelemetryMessage, fps: float,
+                 hint: bool = True) -> np.ndarray:
     """The camera frame with what the tracker sees: the locked beacon (green = TRACK, yellow = COAST),
     the calibrated boresight (white cross), the virtual mount's aim (cyan ring) and the residual between
     the mount and the beacon, plus the telemetry sent to the sandbox."""
     import cv2
     vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
     cam, colour = tracker.cam, STATE_COLOURS.get(msg.state, (255, 255, 255))
+    k = max(1.0, vis.shape[1] / 960.0)           # draw at the same apparent size on any resolution
+    th = max(1, int(round(k)))
     enc = np.array(tracker.gimbal.angles(), dtype=float)
 
     def px(direction):
@@ -428,29 +431,29 @@ def draw_overlay(frame: np.ndarray, tracker: "GroundTracker", msg: TelemetryMess
 
     zone = tracker._zone_roi(frame)
     if zone is not None:
-        cv2.rectangle(vis, zone[:2], zone[2:], (255, 255, 0), 1)
+        cv2.rectangle(vis, zone[:2], zone[2:], (255, 255, 0), th)
     bore = px((tracker.cal.boresight_pan, tracker.cal.boresight_tilt))
-    cv2.drawMarker(vis, bore, (255, 255, 255), cv2.MARKER_CROSS, 24, 1)
+    cv2.drawMarker(vis, bore, (255, 255, 255), cv2.MARKER_CROSS, int(24 * k), th)
     if msg.state != SEARCH:
         b = tracker._last_beacon
         spot = ((int(round(b.x)), int(round(b.y))) if b is not None and msg.state == FINE_TRACK
                 else px(tracker.kf.position))           # COAST: where the tracker predicts the drone is
         if tracker.vmount is not None:
             aim = px(tracker.vmount.angles())
-            cv2.circle(vis, aim, 6, (255, 255, 0), 1)
-            cv2.line(vis, aim, spot, colour, 1)
-        cv2.circle(vis, spot, 16, colour, 2)
-        cv2.drawMarker(vis, spot, colour, cv2.MARKER_CROSS, 10, 1)
+            cv2.circle(vis, aim, int(6 * k), (255, 255, 0), th)
+            cv2.line(vis, aim, spot, colour, th)
+        cv2.circle(vis, spot, int(16 * k), colour, 2 * th)
+        cv2.drawMarker(vis, spot, colour, cv2.MARKER_CROSS, int(10 * k), th)
 
     name = {FINE_TRACK: "TRACK", COAST: "COAST", SEARCH: "SEARCH"}.get(msg.state, str(msg.state))
     lines = [(f"{name}", colour),
              (f"drift {msg.drift_mrad:5.1f} mrad   jitter {msg.jitter_mrad:5.2f} mrad   "
               f"residual {msg.residual_mrad:5.2f} mrad", (255, 255, 255)),
-             (f"intensity {msg.intensity:4.2f}   t {msg.t:6.1f} s   {fps:4.1f} fps   [q] stop", (255, 255, 255))]
+             (f"intensity {msg.intensity:4.2f}   t {msg.t:6.1f} s   {fps:4.1f} fps" + ("   [q] stop" if hint else ""), (255, 255, 255))]
     for i, (text, c) in enumerate(lines):
-        scale, thick = (0.8, 2) if i == 0 else (0.5, 1)
-        org = (10, 28 + 22 * i)
-        cv2.putText(vis, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thick + 3)
+        scale, thick = (0.8 * k, 2 * th) if i == 0 else (0.5 * k, th)
+        org = (int(10 * k), int((28 + 22 * i) * k))
+        cv2.putText(vis, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thick + 3 * th)
         cv2.putText(vis, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, c, thick)
     return vis
 
@@ -544,7 +547,8 @@ def main():
                     help="video = replay a recorded flight (--video FILE) through the camera pipeline")
     ap.add_argument("--video", default=None, help="--source video: the recorded flight (mp4/mov/avi)")
     ap.add_argument("--start", type=float, default=0.0, help="--source video: skip this many seconds of the clip")
-    ap.add_argument("--duration", type=float, default=120.0)
+    ap.add_argument("--duration", type=float, default=None,
+                    help="seconds to run (default: 120 for sim/camera, the whole clip for --source video)")
     ap.add_argument("--fps", type=float, default=120.0)
     ap.add_argument("--endpoint", default=TELEMETRY_ENDPOINT)
     ap.add_argument("--realtime", action="store_true",
@@ -589,9 +593,13 @@ def main():
     ap.add_argument("--show", action="store_true",
                     help="open a preview window: camera feed with the locked beacon, boresight, virtual-mount aim "
                          "and live telemetry drawn on it ([q] or Esc stops the tracker)")
+    ap.add_argument("--save-video", default=None,
+                    help="write that same overlay view to this mp4, one frame per camera frame (for demo footage)")
     args = ap.parse_args()
     if args.source == "video" and not args.video:
         ap.error("--source video needs --video FILE")
+    if args.duration is None and args.source != "video":
+        args.duration = 120.0
 
     pub = ZmqPublisher(args.endpoint)
     from telemetry import CONTROL_ENDPOINT
@@ -600,10 +608,12 @@ def main():
         tracker, rig = build_sim(args)
     else:
         tracker, rig = build_camera(args)
-    tap = FrameTap(rig) if args.show else None
+    tap = FrameTap(rig) if (args.show or args.save_video) else None
+    writer = None
     if tap is not None:
         import cv2
-        cv2.namedWindow("tracker", cv2.WINDOW_NORMAL)
+        if args.show:
+            cv2.namedWindow("tracker", cv2.WINDOW_NORMAL)
     time.sleep(args.wait)
     t0 = time.monotonic()
     n = 0
@@ -618,16 +628,26 @@ def main():
                 inst = 1.0 / max(1e-6, now - t_prev)
                 fps = inst if fps == 0.0 else 0.9 * fps + 0.1 * inst
             t_prev = now
-            cv2.imshow("tracker", draw_overlay(tap.frame, tracker, msg, fps))
-            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
-                break
+            vis = draw_overlay(tap.frame, tracker, msg, fps if args.show else args.fps, hint=bool(args.show))
+            if args.save_video:
+                if writer is None:
+                    writer = cv2.VideoWriter(args.save_video, cv2.VideoWriter_fourcc(*"mp4v"), args.fps,
+                                             (vis.shape[1], vis.shape[0]))
+                writer.write(vis)
+            if args.show:
+                cv2.imshow("tracker", vis)
+                if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                    break
         if args.realtime:
             if t_msg0 is None:                   # anchor to the first message (a replayed clip may start mid-file)
                 t_msg0 = msg.t
             lag = (msg.t - t_msg0) - (time.monotonic() - t0)
             if lag > 0:
                 time.sleep(lag)
-    if tap is not None:
+    if writer is not None:
+        writer.release()
+        print(f"overlay video written to {args.save_video}")
+    if args.show:
         cv2.destroyAllWindows()
     print(f"tracker: sent {n} messages; first lock after "
           f"{tracker.acquisition_time if tracker.acquisition_time is not None else float('nan'):.2f}s; "

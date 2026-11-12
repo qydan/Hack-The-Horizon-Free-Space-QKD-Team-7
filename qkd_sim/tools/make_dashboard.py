@@ -70,7 +70,8 @@ def stats(rows, trace):
         ("Secret bits issued", sum(r["secret_bits"] or 0 for r in keys)),
         ("Max QBER while issuing keys", f"{100*max((r['qber'] for r in keys), default=0):.1f}%"),
         ("Aborts (QBER / decoy)", sum(r["outcome"] in ("abort", "decoy_abort") for r in rows)),
-        ("First tracking lock", f"{first_lock:.2f} s" if first_lock is not None else "n/a"),
+        ("First tracking lock", "n/a" if first_lock is None else
+         "< 0.1 s" if first_lock == 0 else f"{first_lock:.2f} s"),   # 0 = locked in the log's first 100 ms step
     ]
 
 

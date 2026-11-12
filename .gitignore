@@ -28,3 +28,8 @@ htmlcov/
 
 # OS metadata
 .DS_Store
+
+# Recorded flight videos (too big for git)
+/recordings/
+*.mp4
+*.mov
