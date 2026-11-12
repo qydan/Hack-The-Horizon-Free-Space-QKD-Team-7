@@ -37,7 +37,7 @@ import numpy as np
 from gimbal import Gimbal, SimGimbal
 from telemetry import (COAST, FINE_TRACK, SEARCH, TELEMETRY_ENDPOINT, ControlSubscriber, TelemetryMessage,
                        ZmqPublisher)
-from vision import (Beacon, BrightBlobDetector, CameraModel, KalmanCV, LockInDetector, Pose,
+from vision import (Beacon, BrightBlobDetector, CameraModel, ClutterMap, KalmanCV, LockInDetector, Pose,
                     SteadySpotDetector, refine_centroid)
 
 
@@ -82,6 +82,9 @@ class TrackerConfig:
     mount_latency_s: float = 0.06      # virtual mount lag: ~30 ms servo loop + frame interval and exposure at 30 fps
     steady_beacon: bool = False        # beacon does not blink: find it as a bright spot (min_amplitude = contrast)
     spot_max_area: int = 600           # steady mode: largest core (px) still counted as the LED
+    spot_color: str = "auto"           # steady mode: "red" = red excess R - max(G, B) (ignores white lights),
+                                       # "gray" = brightness; "auto" = red on colour frames
+    spot_bg_kernel_px: Optional[int] = None   # steady mode: local-background window (default ~ frame width / 31)
     search_zone: Optional[Tuple[float, float, float, float]] = None   # (x0, y0, x1, y1) as 0-1 fractions of the frame:
                                                                       # only look for the beacon here (the hover area)
 
@@ -98,7 +101,11 @@ class GroundTracker:
         self.pose_fn = pose_fn
         self.lockin = LockInDetector(self.cfg.blink_hz, self.cfg.fps, self.cfg.lockin_periods,
                                      self.cfg.min_amplitude)
-        self.spot = SteadySpotDetector(self.cfg.min_amplitude, max_area=self.cfg.spot_max_area)
+        self.spot = SteadySpotDetector(self.cfg.min_amplitude, max_area=self.cfg.spot_max_area,
+                                       color=self.cfg.spot_color, bg_kernel_px=self.cfg.spot_bg_kernel_px)
+        self.clutter: Optional[ClutterMap] = None     # steady mode: known non-beacon spots (learn_clutter)
+        self._acq_px: Optional[Tuple[float, float]] = None   # where the current run of acquisition hits is
+        self._last_beacon: Optional[Beacon] = None
         self.kf = KalmanCV()
         self.vmount: Optional[SimGimbal] = (SimGimbal(latency_s=self.cfg.mount_latency_s)
                                             if self.cfg.virtual_mount and self.cfg.fixed_camera else None)
@@ -136,23 +143,51 @@ class GroundTracker:
     def _to_search(self, t: float) -> None:
         self.state = SEARCH
         self._hits = self._misses = 0
+        self._acq_px = None
         self.kf.reset()
         self._search_started = t
         self._scan_origin = None
         if self._have_dir:                       # look where the drone was last seen
             self.gimbal.command(*self._last_dir)
 
-    def _find(self, frame: np.ndarray, roi=None) -> Optional[Beacon]:
-        """The beacon in the frame (or in ``roi``): lock-in on a blinking LED, bright spot on a steady one."""
+    def _find(self, frame: np.ndarray, roi=None, prefer=None) -> Optional[Beacon]:
+        """The beacon in the frame (or in ``roi``): lock-in on a blinking LED, bright spot on a steady one.
+        Steady mode: ``prefer`` = (x, y, sigma_px) favours spots near the prediction; a full-frame search
+        skips learned clutter."""
+        searching = roi is None
         if roi is None and self.cfg.search_zone is not None:
-            h, w = frame.shape[:2]
-            zx0, zy0, zx1, zy1 = self.cfg.search_zone
-            roi = (int(zx0 * w), int(zy0 * h), int(zx1 * w), int(zy1 * h))
+            roi = self._zone_roi(frame)
         if self.cfg.steady_beacon:
-            return self.spot.detect(frame, roi)
+            exclude = self.clutter.excluded if (searching and self.clutter is not None) else None
+            return self.spot.detect(frame, roi, exclude=exclude, prefer=prefer)
         if roi is None and not self.lockin.ready:
             return None
         return self.lockin.detect(roi)
+
+    def _zone_roi(self, frame: np.ndarray):
+        if self.cfg.search_zone is None:
+            return None
+        h, w = frame.shape[:2]
+        zx0, zy0, zx1, zy1 = self.cfg.search_zone
+        return int(zx0 * w), int(zy0 * h), int(zx1 * w), int(zy1 * h)
+
+    def learn_clutter(self, source, seconds: float) -> int:
+        """Steady mode, fixed camera: watch the scene with the beacon OFF (or out of view) and remember
+        every LED-like spot (lamps, indicator LEDs, glints) so the search never locks onto one.
+        Returns the number of masked regions."""
+        start = None
+        while True:
+            item = source.read()
+            if item is None:
+                break
+            frame, t = item
+            start = t if start is None else start
+            if self.clutter is None:
+                self.clutter = ClutterMap(frame.shape)
+            self.clutter.learn(self.spot.candidates(frame, self._zone_roi(frame)))
+            if t - start >= seconds:
+                break
+        return self.clutter.count if self.clutter is not None else 0
 
     # ------------------------------------------------------------------ main step
 
@@ -163,6 +198,7 @@ class GroundTracker:
         self._frame_i += 1
         if self._search_started is None:
             self._search_started = t
+        self._last_beacon = None
 
         if not cfg.steady_beacon:
             self.lockin.push(frame, t)
@@ -187,10 +223,12 @@ class GroundTracker:
             pred = np.array(self.kf.predict(dt))
             px, py = self.cam.mrad_to_px(pred[0] - enc[0], pred[1] - enc[1])
             r = cfg.roi_half_px
-            beacon = self._find(frame, (int(px - r), int(py - r), int(px + r), int(py + r)))
+            beacon = self._find(frame, (int(px - r), int(py - r), int(px + r), int(py + r)),
+                                prefer=(px, py, 0.5 * r))
             if beacon is not None:
-                # lock-in says the beacon is here; take this frame's exact position
-                fine = refine_centroid(frame, px, py)
+                # lock-in averages over a few blink periods (lags a moving beacon): take this frame's exact
+                # position. The steady detector already measured this frame, on its own (colour) image.
+                fine = (beacon.x, beacon.y) if cfg.steady_beacon else refine_centroid(frame, px, py)
                 if fine is not None:
                     off = np.array(self.cam.px_to_mrad(*fine))
                     d_new = enc + off
@@ -199,6 +237,7 @@ class GroundTracker:
                 if fine is None:
                     beacon = None
             if beacon is not None:
+                self._last_beacon = beacon
                 measured_dir = d_new
                 resid = float(np.hypot(*(measured_dir - mount)))
                 self.kf.update(*measured_dir)
@@ -243,11 +282,18 @@ class GroundTracker:
         if cfg.fixed_camera:
             # nothing to steer: the blinking spot alone says where the drone is
             if beacon is None:
-                self._hits = 0
+                self._hits, self._acq_px = 0, None
                 return
-            fine = refine_centroid(frame, beacon.x, beacon.y) or (beacon.x, beacon.y)
+            fine = ((beacon.x, beacon.y) if cfg.steady_beacon else
+                    refine_centroid(frame, beacon.x, beacon.y) or (beacon.x, beacon.y))
+            # the hits must be the same spot, not whichever spot won in each frame
+            if self._acq_px is not None and math.hypot(fine[0] - self._acq_px[0],
+                                                       fine[1] - self._acq_px[1]) > 0.5 * cfg.roi_half_px:
+                self._hits = 0
+            self._acq_px = fine
             self._hits += 1
             if self._hits >= cfg.acquire_frames:
+                self._last_beacon = beacon
                 first = enc + np.array(self.cam.px_to_mrad(*fine))
                 self.kf.init(*first)
                 if self.vmount is not None:
@@ -323,7 +369,7 @@ class GroundTracker:
             start = t if start is None else start
             msg = self.update(frame, t)
             if msg.state == FINE_TRACK:
-                b = self._find(frame)
+                b = self._last_beacon       # the spot this frame's measurement came from
                 if b is not None:
                     dirs.append(self._last_dir.copy())
                     amps.append(b.amplitude)
@@ -385,7 +431,7 @@ def build_camera(args):
                         acquire_frames=max(3, round(6 * s)),
                         coast_frames=max(12, round(72 * s)), roi_half_px=max(20, round(40 * w / 480)),
                         max_jump_mrad=args.max_jump_mrad, steady_beacon=args.beacon == "steady",
-                        spot_max_area=max(50, round(600 * (w / 960) ** 2)),
+                        spot_max_area=max(50, round(600 * (w / 960) ** 2)), spot_color=args.spot_color,
                         search_zone=tuple(float(v) for v in args.zone.split(",")) if args.zone else None)
     pose_fn = None
     if args.tag_size:
@@ -395,6 +441,15 @@ def build_camera(args):
     print(f"camera {w}x{h} at {args.hfov:.0f} deg hfov ({cam.mrad_per_px:.2f} mrad/px), "
           f"{args.fps:.0f} fps, blink {args.blink_hz} Hz, "
           f"{'virtual mount, lag %.0f ms' % (1000 * args.mount_latency) if args.virtual_mount else 'no virtual mount'}")
+    if args.clutter_learn > 0:
+        if args.beacon != "steady":
+            print("--clutter-learn only applies to --beacon steady (the lock-in ignores steady lights); skipped")
+        else:
+            print(f"learning clutter for {args.clutter_learn:.0f}s: the beacon must be OFF or out of view")
+            src.restart(None)
+            n = tracker.learn_clutter(src, args.clutter_learn)
+            print(f"clutter: {n} LED-like spot(s) masked from the search; switch the beacon ON now")
+            src.restart(args.duration)
     if args.calibrate > 0:
         print(f"calibrating for {args.calibrate:.0f}s: keep the drone in calm hover with the beacon blinking")
         src.restart(None)
@@ -429,10 +484,16 @@ def main():
     ap.add_argument("--hfov", type=float, default=70.0, help="horizontal FOV in degrees after dewarping")
     ap.add_argument("--beacon", choices=["blink", "steady"], default="blink",
                     help="blink: lock-in on a blinking LED (robust to room lights). steady: constantly-lit LED "
-                         "found as the brightest small spot (needs a dark scene)")
+                         "found as the strongest small, isolated red spot (see --spot-color, --clutter-learn)")
     ap.add_argument("--zone", default=None,
                     help="only look for the beacon in this part of the frame: x0,y0,x1,y1 as 0-1 fractions "
                          "(e.g. 0.25,0.1,0.75,0.9 = middle half); keeps lamps and windows outside it from stealing the lock")
+    ap.add_argument("--spot-color", choices=["red", "gray"], default="red",
+                    help="steady: red = detect on the red excess R - max(G, B), so white lamps, windows and screens "
+                         "are ignored (red LED); gray = brightness only (needs a dark scene)")
+    ap.add_argument("--clutter-learn", type=float, default=0.0,
+                    help="steady: first watch the scene this many seconds with the beacon OFF and mask every "
+                         "LED-like spot (lamps, indicator LEDs, glints) from the search")
     ap.add_argument("--blink-hz", type=float, default=13.0, help="beacon blink rate (e.g. 7.5 at 30 fps)")
     ap.add_argument("--min-amplitude", type=float, default=25.0,
                     help="blink: lock-in grey levels; steady: grey levels the LED must stand above the background")

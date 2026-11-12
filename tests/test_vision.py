@@ -167,3 +167,129 @@ class TestSearchDetectors:
         # round trip
         x, y = c.mrad_to_px(*c.px_to_mrad(123.4, 777.7))
         assert (x, y) == pytest.approx((123.4, 777.7))
+
+
+# ---------------------------------------------------------------- steady (non-blinking) spot detector
+
+def _bgr(shape=(120, 200), ambient=60, seed=0):
+    rng = np.random.default_rng(seed)
+    return (ambient + rng.integers(0, 4, size=shape + (3,))).astype(np.float32)
+
+
+def _spot(img, x, y, peak, bgr=(1.0, 1.0, 1.0), sigma=1.6):
+    yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+    g = peak * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma ** 2))
+    img += g[..., None] * np.asarray(bgr, np.float32) if img.ndim == 3 else g
+
+
+def _u8(img):
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+class TestSteadySpot:
+    def test_red_mode_ignores_a_brighter_white_lamp(self):
+        img = _bgr()
+        _spot(img, 60, 50, 400, sigma=3.0)                       # white lamp, clips
+        _spot(img, 140.3, 70.6, 150, bgr=(0.15, 0.2, 1.0))       # red LED
+        from vision import SteadySpotDetector
+        assert SteadySpotDetector(40, color="gray").detect(_u8(img)).x == pytest.approx(60, abs=1)
+        b = SteadySpotDetector(40, color="red").detect(_u8(img))
+        assert (b.x, b.y) == pytest.approx((140.3, 70.6), abs=0.3)
+
+    def test_clipped_white_led_core_is_found_from_its_red_ring(self):
+        img = _bgr()
+        _spot(img, 100.0, 60.0, 900, bgr=(0.3, 0.35, 1.0), sigma=2.5)   # core clips to (255, 255, 255)
+        u = _u8(img)
+        assert (u[60, 100] == 255).all()
+        from vision import SteadySpotDetector
+        b = SteadySpotDetector(40, color="red", bg_kernel_px=31).detect(u)   # background scale of a 960 px frame
+        assert b is not None and (b.x, b.y) == pytest.approx((100, 60), abs=0.5)
+
+    def test_large_bright_area_and_its_corners_are_ignored(self):
+        img = np.random.default_rng(0).integers(0, 4, size=(120, 200)).astype(np.float32) + 40
+        img[20:80, 20:90] = 255                                  # blown-out window, far brighter than the LED
+        _spot(img, 150, 60, 120)
+        from vision import SteadySpotDetector
+        b = SteadySpotDetector(40, color="gray").detect(_u8(img))
+        assert b is not None and (b.x, b.y) == pytest.approx((150, 60), abs=0.5)
+
+    def test_prefer_picks_the_spot_near_the_prediction(self):
+        img = np.zeros((120, 200), np.float32)
+        _spot(img, 50, 60, 200)
+        _spot(img, 150, 60, 120)
+        from vision import SteadySpotDetector
+        d = SteadySpotDetector(40)
+        assert d.detect(_u8(img)).x == pytest.approx(50, abs=0.5)
+        assert d.detect(_u8(img), prefer=(145, 62, 15)).x == pytest.approx(150, abs=0.5)
+
+    def test_clutter_map_hides_a_known_lamp_from_the_search(self):
+        from vision import ClutterMap, SteadySpotDetector
+        d = SteadySpotDetector(40)
+        lamp = np.zeros((120, 200), np.float32)
+        _spot(lamp, 50, 60, 200)
+        cm = ClutterMap(lamp.shape)
+        cm.learn(d.candidates(_u8(lamp)))                        # beacon off: only the lamp
+        assert cm.count == 1
+        scene = lamp.copy()
+        _spot(scene, 150, 60, 120)
+        assert d.detect(_u8(scene), exclude=cm.excluded).x == pytest.approx(150, abs=0.5)
+
+    def test_noisy_frame_without_a_spot_gives_nothing(self):
+        img = np.random.default_rng(1).normal(100, 15, size=(120, 200)).astype(np.float32)
+        from vision import SteadySpotDetector
+        assert SteadySpotDetector(25).detect(_u8(img)) is None
+
+    def test_edges_and_lines_are_rejected(self):
+        img = np.zeros((120, 200), np.float32)
+        img[58:61, 20:120] = 200                                  # thin bright line (a lit edge)
+        from vision import SteadySpotDetector
+        assert SteadySpotDetector(40).detect(_u8(img)) is None
+
+
+class TestCourtLines:
+    """A squash court: red painted lines on a white wall, mid-grey exposure. The detector runs with the
+    background scale of a 960 px frame (31 px), as on the rig."""
+
+    LINES = [((0, 135), (399, 135), 4), ((150, 0), (165, 239), 3), ((250, 30), (390, 200), 3)]
+
+    def court(self, led=None, peak=300.0, stub=False, lamp=None):
+        rng = np.random.default_rng(0)
+        img = (150 + rng.integers(0, 4, size=(240, 400, 3))).astype(np.float32)
+        m = np.zeros((240, 400), np.uint8)
+        for p, q, w in self.LINES + ([((60, 200), (68, 204), 4)] if stub else []):
+            cv2.line(m, p, q, 1, w)
+        img[m > 0] = (35, 35, 120)                                   # red paint (BGR)
+        if lamp is not None:
+            _spot(img, *lamp, 500, sigma=2.5)                        # white lamp, clips
+        if led is not None:
+            _spot(img, *led, peak, bgr=(0.25, 0.3, 1.0), sigma=1.6)
+        return _u8(cv2.GaussianBlur(img, (3, 3), 0))
+
+    def test_lines_alone_give_nothing(self):
+        from vision import SteadySpotDetector
+        assert SteadySpotDetector(40, bg_kernel_px=31).candidates(self.court()) == []
+
+    @pytest.mark.parametrize("led", [(200, 135), (155, 80), (320, 115), (200, 60)],
+                             ids=["on horizontal", "on vertical", "on diagonal", "off the lines"])
+    def test_led_is_found_on_and_off_the_lines(self, led):
+        from vision import SteadySpotDetector
+        b = SteadySpotDetector(40, bg_kernel_px=31).detect(self.court(led))
+        assert b is not None and (b.x, b.y) == pytest.approx(led, abs=0.7)
+
+    def test_led_crossing_a_line_edge_is_never_lost(self):
+        from vision import SteadySpotDetector
+        d = SteadySpotDetector(40, bg_kernel_px=31)
+        for x in np.arange(146.0, 164.5, 1.5):                      # the vertical line is at x = 155 here
+            b = d.detect(self.court((x, 80)))
+            assert b is not None and abs(b.x - x) < 1.5 and abs(b.y - 80) < 0.5, (x, b)
+
+    def test_short_piece_of_line_is_paint_not_a_light(self):
+        from vision import SteadySpotDetector
+        c = SteadySpotDetector(40, bg_kernel_px=31).candidates(self.court(stub=True), keep_rejected=True)
+        assert all(not q.valid for q in c)
+        assert any(q.reason == "not a light" and abs(q.x - 64) < 4 for q in c)
+
+    def test_white_lamp_touching_a_red_line_is_not_made_red(self):
+        from vision import SteadySpotDetector
+        b = SteadySpotDetector(40, bg_kernel_px=31).detect(self.court(led=(200, 60), lamp=(100, 131)))
+        assert b is not None and (b.x, b.y) == pytest.approx((200, 60), abs=0.7)

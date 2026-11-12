@@ -9,6 +9,7 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from gimbal import SimGimbal
@@ -41,9 +42,15 @@ class SimRig:
                  phases: Optional[List[Phase]] = None, fps: float = 120.0, duration: float = 120.0,
                  appear_at: float = 2.0, blink_hz: float = 13.0, start_offset=(300.0, 90.0),
                  range_m: float = 3.0, seed: int = 0, noise: int = 5,
-                 steady_beacon: bool = False, distractors: bool = True):
+                 steady_beacon: bool = False, distractors: bool = True,
+                 color: bool = False, bright_scene: bool = False, court_lines: bool = False):
         self.steady_beacon = steady_beacon      # beacon constantly on (no blink)
         self.distractors = distractors          # window light + mains lamp in the scene
+        self.court_lines = court_lines          # squash court: red painted lines on a white wall, one of them
+                                                # right through the hover point (the beacon sits on it)
+        self.color = color or bright_scene or court_lines   # BGR frames: red beacon, white lights
+        self.bright_scene = bright_scene        # lit room: ambient light, a blown-out window, a white lamp
+                                                # brighter than the beacon next to the drone, a red poster
         self.cam = camera or CameraModel(480, 270, 70.0)
         self.gimbal = gimbal or SimGimbal()
         self.phases = phases or demo_phases()
@@ -91,14 +98,23 @@ class SimRig:
 
     # -------------------------------------------------------------- rendering
 
-    def _blob(self, img, cx, cy, sigma, peak):
+    def _blob(self, img, cx, cy, sigma, peak, bgr=(1.0, 1.0, 1.0)):
         r = int(sigma * 4)
         x0, x1 = max(0, int(cx) - r), min(self.cam.width, int(cx) + r + 1)
         y0, y1 = max(0, int(cy) - r), min(self.cam.height, int(cy) + r + 1)
         if x0 >= x1 or y0 >= y1:
             return
         gx, gy = np.meshgrid(np.arange(x0, x1), np.arange(y0, y1))
-        img[y0:y1, x0:x1] += peak * np.exp(-((gx - cx) ** 2 + (gy - cy) ** 2) / (2 * sigma ** 2))
+        g = peak * np.exp(-((gx - cx) ** 2 + (gy - cy) ** 2) / (2 * sigma ** 2))
+        if img.ndim == 2:
+            img[y0:y1, x0:x1] += g
+        else:
+            img[y0:y1, x0:x1] += g[..., None] * np.asarray(bgr, np.float32)
+
+    def _rect(self, img, cx, cy, half_w, half_h, value, bgr=(1.0, 1.0, 1.0)):
+        x0, x1 = max(0, int(cx - half_w)), max(0, int(cx + half_w))
+        y0, y1 = max(0, int(cy - half_h)), max(0, int(cy + half_h))
+        img[y0:y1, x0:x1] += value if img.ndim == 2 else value * np.asarray(bgr, np.float32)
 
     def _to_px(self, world_mrad):
         pan, tilt = self.gimbal.angles()
@@ -114,7 +130,27 @@ class SimRig:
         self.gimbal.step_time(dt)
         self._world(t, dt)
 
-        img = self.rng.integers(0, self.noise, size=(self.cam.height, self.cam.width)).astype(np.float32)
+        shape = (self.cam.height, self.cam.width) + ((3,) if self.color else ())
+        img = self.rng.integers(0, self.noise, size=shape).astype(np.float32)
+        if self.bright_scene:
+            img += 60.0 + np.linspace(0.0, 30.0, self.cam.height, dtype=np.float32)[:, None, None]   # lit room
+            wx, wy = self._to_px((-250.0, -60.0))
+            self._rect(img, wx, wy, 30, 22, 255.0)                                     # blown-out window
+            px, py = self._to_px((200.0, 60.0))
+            self._rect(img, px, py, 22, 22, 110.0, bgr=(0.1, 0.15, 1.0))               # red poster
+            lx, ly = self._to_px((60.0, -20.0))
+            self._blob(img, lx, ly, 3.0, 400.0)                                        # white lamp, clips
+        if self.court_lines:
+            img += 110.0                                                               # white wall
+            m = np.zeros((self.cam.height, self.cam.width), np.uint8)
+            for (a, b, wd) in [((-900.0, 0.0), (900.0, 0.0), 4),                       # through the hover point
+                               ((-900.0, 80.0), (900.0, 80.0), 4),
+                               ((-120.0, -500.0), (-100.0, 500.0), 3),                 # near-vertical
+                               ((40.0, -300.0), (400.0, 300.0), 3),                    # diagonal
+                               ((-60.0, 150.0), (-40.0, 160.0), 4)]:                   # short stub
+                pa, pb = self._to_px(a), self._to_px(b)
+                cv2.line(m, (int(round(pa[0])), int(round(pa[1]))), (int(round(pb[0])), int(round(pb[1]))), 1, wd)
+            img[m > 0] = img[m > 0] * 0.25 + np.array([10.0, 10.0, 110.0], np.float32)  # red paint
         if self.distractors:
             wx, wy = self._to_px(self.window_blob)
             self._blob(img, wx, wy, 3.0, 200.0)                                        # steady window
@@ -124,10 +160,15 @@ class SimRig:
             bx, by = self._to_px(self.drone)
             x0, x1 = int(bx - 18), int(bx + 18)
             y0, y1 = int(by - 4), int(by + 16)
-            img[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] += 80.0                  # drone body
+            body = img[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
+            if self.color:
+                body[...] = 45.0 + self.rng.integers(0, self.noise, size=body.shape)  # opaque dark drone body
+            else:
+                body += 80.0                                                       # (dark-room grey scenes)
             blink = 1.0 if self.steady_beacon else \
                 0.4 + 0.6 * (1.0 if math.sin(2 * math.pi * self.blink_hz * t) >= 0 else 0.0)
-            self._blob(img, bx, by, 1.6, 150.0 * blink * self.brightness)              # beacon 100% <-> 40%
+            self._blob(img, bx, by, 1.6, 150.0 * blink * self.brightness,
+                       bgr=(0.15, 0.2, 1.0))                                           # red beacon 100% <-> 40%
         self.last_frame = np.clip(img, 0, 255).astype(np.uint8)
         return self.last_frame, t
 

@@ -111,7 +111,7 @@ def phase_lockin(cap, fps, seconds, a, label):
 def steady_check(cap, fps, shape, a):
     """Constantly-lit LED: how clearly does it stand out, and is anything else competing?"""
     from vision import SteadySpotDetector
-    det = SteadySpotDetector(min_contrast=a.contrast)
+    det = SteadySpotDetector(min_contrast=a.contrast, color=a.spot_color)
     input("\n[2/2] STEADY BEACON: switch the LED ON at its real working distance, keep it still, "
           "press Enter...")
     pts, peaks, sat, rivals, bgs, cost = [], [], [], [], [], []
@@ -125,17 +125,15 @@ def steady_check(cap, fps, shape, a):
             f = cv2.resize(f, (a.proc_width, int(f.shape[0] * s)), interpolation=cv2.INTER_AREA)
         g = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
         t0 = time.perf_counter()
-        b = det.detect(f)
+        cands = det.candidates(f)
+        b = cands[0].as_beacon() if cands else None
         cost.append(time.perf_counter() - t0)
         bgs.append(float(np.median(g[::4, ::4])))
         if b is not None:
             pts.append((b.x, b.y))
             peaks.append(b.peak)
             sat.append(float((g >= 250).mean()))
-        # other bright compact things that could be mistaken for the LED
-        m = (cv2.GaussianBlur(g, (5, 5), 0) >= np.median(g) + a.contrast).astype(np.uint8)
-        n = cv2.connectedComponents(m, connectivity=8)[0] - 1
-        rivals.append(n)
+        rivals.append(len(cands))        # spots the detector accepts (the LED plus anything it could confuse)
     cap.release()
     rate = len(pts) / max(1, len(cost))
     print("\n================ RESULT (steady beacon) ================")
@@ -151,22 +149,30 @@ def steady_check(cap, fps, shape, a):
         p = np.array(pts)
         sd = p.std(axis=0)
         verdict(float(np.hypot(*sd)) < 3.0, f"spot position scatter {sd[0]:.2f}, {sd[1]:.2f} px while held still (want < 3)")
+        unit = "red-excess levels" if a.spot_color == "red" else "grey levels"
         verdict(float(np.median(peaks)) >= 2 * a.contrast,
-                f"LED stands {np.median(peaks):.0f} grey levels above the background (want >= {2 * a.contrast:.0f})")
+                f"LED stands {np.median(peaks):.0f} {unit} above its local background (want >= {2 * a.contrast:.0f})")
         verdict(max(sat) < 0.01, "LED not blown out" if max(sat) < 0.01 else "LED saturates a large area: lower ISO/exposure")
     verdict(float(np.median(rivals)) <= 1.5,
-            f"bright candidates in view: {np.median(rivals):.0f} (want 1: remove lamps, windows, reflections, screens)")
-    verdict(np.mean(bgs) < 80, f"background level {np.mean(bgs):.0f} (want dark, < 80)")
+            f"LED-like spots in view: {np.median(rivals):.0f} (want 1: remove or --zone out the others, or mask them "
+            f"with tracker --clutter-learn; tools/detect_view.py shows which)")
+    if a.spot_color == "gray":
+        verdict(np.mean(bgs) < 80, f"background level {np.mean(bgs):.0f} (want dark, < 80; or use --spot-color red)")
+    else:
+        print(f"  info  background level {np.mean(bgs):.0f} (red mode tolerates a lit room)")
     verdict(1000 * np.mean(cost) < 0.5 * 1000 / fps, f"detector cost {1000 * np.mean(cost):.1f} ms/frame")
     print(f"\n  python src/tracker.py --source camera --device {a.device} --fps {fps:.0f} --beacon steady "
-          f"--min-amplitude {a.contrast:.0f} --proc-width {a.proc_width} --hfov <fov>")
+          f"--spot-color {a.spot_color} --min-amplitude {a.contrast:.0f} --proc-width {a.proc_width} --hfov <fov>")
     print("\nOverall:", "READY for tracking tests" if ok else "fix the FIX lines above, then re-run")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--steady", action="store_true", help="LED is constantly on (no blink)")
-    ap.add_argument("--contrast", type=float, default=40.0, help="steady mode: grey levels above background")
+    ap.add_argument("--contrast", type=float, default=40.0,
+                    help="steady mode: contrast above the local background (red-excess or grey levels)")
+    ap.add_argument("--spot-color", choices=["red", "gray"], default="red",
+                    help="steady mode: red = red excess R - max(G, B) (ignores white lights); gray = brightness")
     ap.add_argument("--device", type=int, default=0)
     ap.add_argument("--width", type=int, default=1920)
     ap.add_argument("--height", type=int, default=1080)

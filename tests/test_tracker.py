@@ -236,3 +236,70 @@ def test_search_zone_keeps_a_window_light_from_stealing_the_lock():
     assert tr.acquisition_time is not None and 1.9 < tr.acquisition_time < 5.0
     late = [m for m in msgs if m.t > 8.0]
     assert sum(m.state == FINE_TRACK for m in late) > 0.9 * len(late)
+
+
+# ---------------------------------------------------------------- steady beacon in a lit room
+
+def _bright_run(spot_color, duration=12.0, **rig_kw):
+    """Fixed camera, lit colour scene (ambient light, blown-out window, a white lamp brighter than the LED
+    20 px from the drone, a red poster). Returns (tracker, rig, per-frame tracking error in mrad)."""
+    from tracker import TrackerConfig
+    cam = CameraModel(480, 270, 70.0)
+    kw = dict(phases=[Phase(0, 1e9, 6, 0.4, 0.5)], duration=duration, fps=30, appear_at=2.0,
+              start_offset=(0.0, 0.0), seed=3, steady_beacon=True)
+    kw.update(rig_kw)
+    rig = SimRig(cam, _Still(), **kw)
+    cfg = TrackerConfig(fps=30, fixed_camera=True, steady_beacon=True, min_amplitude=40.0, acquire_frames=3,
+                        coast_frames=18, spot_color=spot_color)
+    tr = GroundTracker(cam, rig.gimbal, config=cfg)
+    errs, states = [], []
+    while (item := rig.read()) is not None:
+        msg = tr.update(*item)
+        states.append((msg.t, msg.state))
+        if msg.state == FINE_TRACK:
+            errs.append(float(np.hypot(*(np.array(tr.kf.position) - np.array(rig.drone)))))
+    return tr, states, errs
+
+
+def test_red_steady_detector_tracks_the_led_in_a_lit_room_without_a_zone():
+    tr, states, errs = _bright_run("red", bright_scene=True)
+    assert all(s == SEARCH for t, s in states if t < 2.0)            # nothing LED-like before the drone appears
+    assert tr.acquisition_time is not None and tr.acquisition_time < 3.0
+    late = [s for t, s in states if t > 5.0]
+    assert sum(s == FINE_TRACK for s in late) > 0.95 * len(late)
+    assert np.median(errs) < 1.0 and max(errs) < 5.0                  # on the LED, never the lamp (~60 mrad off)
+
+
+def test_brightness_only_detector_is_stolen_by_the_lamp_in_a_lit_room():
+    """The reason for the colour mode: on brightness alone the clipped white lamp wins."""
+    tr, states, errs = _bright_run("gray", bright_scene=True)
+    assert errs and np.median(errs) > 20.0
+
+
+def test_clutter_learning_keeps_room_lights_from_stealing_the_lock_without_a_zone():
+    """Grey frames (no colour to help): learn the window and the mains lamp with the beacon not yet in view."""
+    from tracker import TrackerConfig
+    cam = CameraModel(480, 270, 70.0)
+    rig = SimRig(cam, _Still(), phases=[Phase(0, 1e9, 6, 0.4, 0.5)], duration=12.0, fps=30, appear_at=2.0,
+                 start_offset=(0.0, 0.0), seed=3, steady_beacon=True, distractors=True)
+    cfg = TrackerConfig(fps=30, fixed_camera=True, steady_beacon=True, min_amplitude=40.0, acquire_frames=3,
+                        coast_frames=18)
+    tr = GroundTracker(cam, rig.gimbal, config=cfg)
+    assert tr.learn_clutter(rig, 1.5) == 2                           # the window light and the mains lamp
+    errs = []
+    while (item := rig.read()) is not None:
+        if tr.update(*item).state == FINE_TRACK:
+            errs.append(float(np.hypot(*(np.array(tr.kf.position) - np.array(rig.drone)))))
+    assert tr.acquisition_time is not None
+    assert len(errs) > 200 and np.median(errs) < 1.0
+
+
+def test_red_steady_detector_tracks_the_led_in_a_squash_court():
+    """Red court lines on a white wall (one running right behind the hover point), plus the lit-room lamp,
+    window and red poster."""
+    tr, states, errs = _bright_run("red", bright_scene=True, court_lines=True)
+    assert all(s == SEARCH for t, s in states if t < 2.0)
+    assert tr.acquisition_time is not None and tr.acquisition_time < 3.0
+    late = [s for t, s in states if t > 5.0]
+    assert sum(s == FINE_TRACK for s in late) > 0.95 * len(late)
+    assert np.median(errs) < 1.0 and max(errs) < 5.0
