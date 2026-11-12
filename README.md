@@ -68,7 +68,7 @@ Useful options: `--block` (seconds per key block), `--pulse-rate`, `--snr` (on-a
 Fixed camera, no gimbal (run on Windows Python, not WSL). Full procedure: `docs/hardware_handoff.md`.
 
 ```bash
-python tools/camera_check.py --device 0 --fps 30 --steady                           # is the camera good enough? prints the settings to use
+python tools/camera_check.py --device 1 --fps 30 --steady                           # is the camera good enough? prints the settings to use
 python src/tracker.py --source camera --fps 30 --beacon steady --calibrate 15 --duration 1   # calm hover: saves calibration.json
 python src/demo_runner.py --source zmq --log run.jsonl --record demo.csv     # sandbox first
 python src/tracker.py --source camera --fps 30 --beacon steady                 # then the tracker (120 s)

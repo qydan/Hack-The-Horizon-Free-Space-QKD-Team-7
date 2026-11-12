@@ -61,7 +61,7 @@ def stats(rows, trace):
     for r in rows:
         run = run + 1 if r["outcome"] == "key" else 0
         best = max(best, run)
-    first_lock = next((r["t"] for r in trace if r.get("state") == "TRACK"), None)
+    first_lock = next((r["t"] - trace[0]["t"] for r in trace if r.get("state") == "TRACK"), None)
     return [
         ("Key blocks", len(rows)),
         ("Keys issued", len(keys)),
@@ -70,7 +70,7 @@ def stats(rows, trace):
         ("Secret bits issued", sum(r["secret_bits"] or 0 for r in keys)),
         ("Max QBER while issuing keys", f"{100*max((r['qber'] for r in keys), default=0):.1f}%"),
         ("Aborts (QBER / decoy)", sum(r["outcome"] in ("abort", "decoy_abort") for r in rows)),
-        ("First tracking lock", f"{first_lock:g} s" if first_lock is not None else "n/a"),
+        ("First tracking lock", f"{first_lock:.2f} s" if first_lock is not None else "n/a"),
     ]
 
 

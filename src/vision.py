@@ -717,3 +717,49 @@ class VideoCaptureSource:
 
     def release(self):
         self.cap.release()
+
+
+class VideoFileSource:
+    """Replays a recorded flight video through the tracker, frame by frame.
+
+    Timestamps come from the file (frame index / file fps), not the wall clock, so a replay
+    gives the same telemetry however fast the machine runs it. ``restart`` does not rewind:
+    a ``--calibrate`` or ``--clutter-learn`` pass uses the start of the clip and tracking
+    carries on from there (record the calm hover / beacon-off part first)."""
+
+    def __init__(self, path: str, proc_width: Optional[int] = None, duration: Optional[float] = None,
+                 start_s: float = 0.0):
+        self.cap = cv2.VideoCapture(path)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"cannot open video {path}")
+        self.fps = float(self.cap.get(cv2.CAP_PROP_FPS)) or 30.0
+        self.n_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if start_s > 0:
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(start_s * self.fps)))
+        self._i = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+        self.proc_width = proc_width
+        self.duration = duration
+        self._t0: Optional[float] = None
+
+    def restart(self, duration: Optional[float] = None) -> None:
+        self.duration = duration
+        self._t0 = None
+
+    def read(self):
+        ok, frame = self.cap.read()
+        if not ok:
+            return None
+        t = self._i / self.fps
+        self._i += 1
+        if self._t0 is None:
+            self._t0 = t
+        if self.duration is not None and t - self._t0 > self.duration:
+            return None
+        if self.proc_width and frame.shape[1] > self.proc_width:
+            s = self.proc_width / frame.shape[1]
+            frame = cv2.resize(frame, (self.proc_width, int(round(frame.shape[0] * s))),
+                               interpolation=cv2.INTER_AREA)
+        return frame, t
+
+    def release(self):
+        self.cap.release()

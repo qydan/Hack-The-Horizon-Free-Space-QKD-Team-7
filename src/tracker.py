@@ -395,6 +395,66 @@ class GroundTracker:
             yield self.update(frame, t)
 
 
+# --------------------------------------------------------------------------- live preview (--show)
+
+class FrameTap:
+    """Passes a frame source through unchanged and keeps the last frame for the preview window."""
+
+    def __init__(self, source):
+        self.source = source
+        self.frame: Optional[np.ndarray] = None
+
+    def read(self):
+        item = self.source.read()
+        self.frame = item[0] if item is not None else None
+        return item
+
+
+STATE_COLOURS = {FINE_TRACK: (0, 220, 0), COAST: (0, 220, 255), SEARCH: (0, 0, 255)}   # BGR
+
+
+def draw_overlay(frame: np.ndarray, tracker: "GroundTracker", msg: TelemetryMessage, fps: float) -> np.ndarray:
+    """The camera frame with what the tracker sees: the locked beacon (green = TRACK, yellow = COAST),
+    the calibrated boresight (white cross), the virtual mount's aim (cyan ring) and the residual between
+    the mount and the beacon, plus the telemetry sent to the sandbox."""
+    import cv2
+    vis = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame.copy()
+    cam, colour = tracker.cam, STATE_COLOURS.get(msg.state, (255, 255, 255))
+    enc = np.array(tracker.gimbal.angles(), dtype=float)
+
+    def px(direction):
+        x, y = cam.mrad_to_px(direction[0] - enc[0], direction[1] - enc[1])
+        return int(round(x)), int(round(y))
+
+    zone = tracker._zone_roi(frame)
+    if zone is not None:
+        cv2.rectangle(vis, zone[:2], zone[2:], (255, 255, 0), 1)
+    bore = px((tracker.cal.boresight_pan, tracker.cal.boresight_tilt))
+    cv2.drawMarker(vis, bore, (255, 255, 255), cv2.MARKER_CROSS, 24, 1)
+    if msg.state != SEARCH:
+        b = tracker._last_beacon
+        spot = ((int(round(b.x)), int(round(b.y))) if b is not None and msg.state == FINE_TRACK
+                else px(tracker.kf.position))           # COAST: where the tracker predicts the drone is
+        if tracker.vmount is not None:
+            aim = px(tracker.vmount.angles())
+            cv2.circle(vis, aim, 6, (255, 255, 0), 1)
+            cv2.line(vis, aim, spot, colour, 1)
+        cv2.circle(vis, spot, 16, colour, 2)
+        cv2.drawMarker(vis, spot, colour, cv2.MARKER_CROSS, 10, 1)
+
+    name = {FINE_TRACK: "TRACK", COAST: "COAST", SEARCH: "SEARCH"}.get(msg.state, str(msg.state))
+    lines = [(f"{name}", colour),
+             (f"drift {msg.drift_mrad:5.1f} mrad   jitter {msg.jitter_mrad:5.2f} mrad   "
+              f"residual {msg.residual_mrad:5.2f} mrad", (255, 255, 255)),
+             (f"intensity {msg.intensity:4.2f}   t {msg.t:6.1f} s   {fps:4.1f} fps   [q] stop", (255, 255, 255))]
+    for i, (text, c) in enumerate(lines):
+        scale, thick = (0.8, 2) if i == 0 else (0.5, 1)
+        org = (10, 28 + 22 * i)
+        cv2.putText(vis, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thick + 3)
+        cv2.putText(vis, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, c, thick)
+    return vis
+
+
 # --------------------------------------------------------------------------- program
 
 def build_sim(args):
@@ -415,13 +475,21 @@ def build_camera(args):
     """Fixed camera (no gimbal) on the real rig. Run on Windows Python."""
     import cv2
     from gimbal import FixedGimbal
-    from vision import VideoCaptureSource
-    backend = cv2.CAP_DSHOW if sys.platform == "win32" else None
-    src = VideoCaptureSource(args.device, args.cap_width, args.cap_height, args.fps, manual_exposure=args.exposure,
-                             backend=backend, proc_width=args.proc_width, duration=args.duration)
+    from vision import VideoCaptureSource, VideoFileSource
+    if args.source == "video":
+        src = VideoFileSource(args.video, proc_width=args.proc_width, duration=args.duration, start_s=args.start)
+        args.fps = src.fps                      # the tracker's frame-count settings follow the file's real rate
+        print(f"video {args.video}: {src.fps:.2f} fps, {src.n_frames} frames ({src.n_frames / src.fps:.1f} s)")
+    else:
+        backend = cv2.CAP_DSHOW if sys.platform == "win32" else None
+        src = VideoCaptureSource(args.device, args.cap_width, args.cap_height, args.fps,
+                                 manual_exposure=args.exposure, backend=backend, proc_width=args.proc_width,
+                                 duration=args.duration)
     first = src.read()
     if first is None:
-        raise SystemExit("camera gave no frames")
+        raise SystemExit("camera gave no frames" if args.source == "camera" else
+                         f"no frames decoded from {args.video}: OpenCV could not decode it (10-bit HEVC is the "
+                         f"usual cause); re-encode with ffmpeg -i IN -c:v libx264 -pix_fmt yuv420p OUT.mp4")
     h, w = first[0].shape[:2]
     cam = CameraModel(w, h, args.hfov)
     # the frame-count settings are tuned for 120 fps; rescale them to the real frame rate
@@ -472,16 +540,21 @@ def main():
     # show output as it happens (even when piped) and never crash on a console that can't encode a character
     sys.stdout.reconfigure(line_buffering=True, errors="replace")
     ap = argparse.ArgumentParser(description="Ground tracker: publishes telemetry for the sandbox")
-    ap.add_argument("--source", choices=["sim", "camera"], default="sim")
+    ap.add_argument("--source", choices=["sim", "camera", "video"], default="sim",
+                    help="video = replay a recorded flight (--video FILE) through the camera pipeline")
+    ap.add_argument("--video", default=None, help="--source video: the recorded flight (mp4/mov/avi)")
+    ap.add_argument("--start", type=float, default=0.0, help="--source video: skip this many seconds of the clip")
     ap.add_argument("--duration", type=float, default=120.0)
     ap.add_argument("--fps", type=float, default=120.0)
     ap.add_argument("--endpoint", default=TELEMETRY_ENDPOINT)
-    ap.add_argument("--realtime", action="store_true", help="pace the simulated rig at its frame rate")
-    ap.add_argument("--device", type=int, default=0)
+    ap.add_argument("--realtime", action="store_true",
+                    help="pace the simulated rig / replayed video at its frame rate (use with --show)")
+    ap.add_argument("--device", type=int, default=1, help="camera index (1 = the Action 5 Pro on the rig laptop)")
     ap.add_argument("--cap-width", type=int, default=1920, help="camera capture size (camera source)")
     ap.add_argument("--cap-height", type=int, default=1080)
     ap.add_argument("--proc-width", type=int, default=960, help="downscale frames to this width for tracking")
-    ap.add_argument("--hfov", type=float, default=70.0, help="horizontal FOV in degrees after dewarping")
+    ap.add_argument("--hfov", type=float, default=104.0,
+                    help="horizontal FOV in degrees after dewarping (104 = Action 5 Pro dewarped standard mode)")
     ap.add_argument("--beacon", choices=["blink", "steady"], default="blink",
                     help="blink: lock-in on a blinking LED (robust to room lights). steady: constantly-lit LED "
                          "found as the strongest small, isolated red spot (see --spot-color, --clutter-learn)")
@@ -513,7 +586,12 @@ def main():
     ap.add_argument("--calibration", default="calibration.json")
     ap.add_argument("--calibrate", type=float, default=0.0, help="seconds of calm hover to calibrate on (camera)")
     ap.add_argument("--wait", type=float, default=1.0, help="seconds to wait for subscribers to connect")
+    ap.add_argument("--show", action="store_true",
+                    help="open a preview window: camera feed with the locked beacon, boresight, virtual-mount aim "
+                         "and live telemetry drawn on it ([q] or Esc stops the tracker)")
     args = ap.parse_args()
+    if args.source == "video" and not args.video:
+        ap.error("--source video needs --video FILE")
 
     pub = ZmqPublisher(args.endpoint)
     from telemetry import CONTROL_ENDPOINT
@@ -522,16 +600,35 @@ def main():
         tracker, rig = build_sim(args)
     else:
         tracker, rig = build_camera(args)
+    tap = FrameTap(rig) if args.show else None
+    if tap is not None:
+        import cv2
+        cv2.namedWindow("tracker", cv2.WINDOW_NORMAL)
     time.sleep(args.wait)
     t0 = time.monotonic()
     n = 0
-    for msg in tracker.run(rig, ctl):
+    fps, t_prev = 0.0, None
+    t_msg0 = None
+    for msg in tracker.run(tap or rig, ctl):
         pub.send(msg)
         n += 1
+        if tap is not None and tap.frame is not None:
+            now = time.monotonic()
+            if t_prev is not None:
+                inst = 1.0 / max(1e-6, now - t_prev)
+                fps = inst if fps == 0.0 else 0.9 * fps + 0.1 * inst
+            t_prev = now
+            cv2.imshow("tracker", draw_overlay(tap.frame, tracker, msg, fps))
+            if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+                break
         if args.realtime:
-            lag = msg.t - (time.monotonic() - t0)
+            if t_msg0 is None:                   # anchor to the first message (a replayed clip may start mid-file)
+                t_msg0 = msg.t
+            lag = (msg.t - t_msg0) - (time.monotonic() - t0)
             if lag > 0:
                 time.sleep(lag)
+    if tap is not None:
+        cv2.destroyAllWindows()
     print(f"tracker: sent {n} messages; first lock after "
           f"{tracker.acquisition_time if tracker.acquisition_time is not None else float('nan'):.2f}s; "
           f"lock losses: {tracker.lock_losses}")

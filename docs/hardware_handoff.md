@@ -41,8 +41,8 @@ fan are missing.
 
 ## Step 1: check the camera
 ```bash
-python tools/camera_check.py --device 0 --width 1920 --height 1080 --fps 30
-python tools/camera_check.py --device 0 --fps 30 --steady          # our beacon: a constantly-lit LED
+python tools/camera_check.py --device 1 --width 1920 --height 1080 --fps 30
+python tools/camera_check.py --device 1 --fps 30 --steady          # our beacon: a constantly-lit LED
 ```
 Three phases (frame rate, noise floor with the beacon off, beacon on). It prints OK / FIX lines
 and the settings to use: real fps, `min_amplitude`, and a first guess for `i_ref`. Fix every FIX
@@ -50,7 +50,7 @@ line before going on.
 
 ## Step 2: calibrate in calm hover
 ```bash
-python src/tracker.py --source camera --device 0 --fps 30 --beacon steady --hfov 70 --calibrate 15 --duration 1
+python src/tracker.py --source camera --device 1 --fps 30 --beacon steady --hfov 104 --calibrate 15 --duration 1
 ```
 Hold the drone in calm hover with the beacon on. This saves `calibration.json` (boresight
 direction and full-signal beacon brightness); later runs load it automatically. Pass the fps and
